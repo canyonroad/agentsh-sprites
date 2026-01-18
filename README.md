@@ -343,7 +343,6 @@ This removes agentsh and restores the original shell. Create a new checkpoint af
 ## Related Projects
 
 - [agentsh](https://github.com/canyonroad/agentsh) - The core runtime security tool
-- [agentsh-daytona](https://github.com/canyonroad/agentsh-daytona) - agentsh for Daytona sandboxes
 - [Sprites.dev](https://sprites.dev) - Stateful sandboxes from Fly.io
 
 ## License
