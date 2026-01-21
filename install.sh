@@ -3,7 +3,7 @@
 # https://github.com/canyonroad/agentsh-sprites
 set -euo pipefail
 
-AGENTSH_VERSION="${AGENTSH_VERSION:-0.7.10}"
+AGENTSH_VERSION="${AGENTSH_VERSION:-0.8.10}"
 AGENTSH_REPO="https://github.com/canyonroad/agentsh"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -97,7 +97,11 @@ else
     log_warn "Server may not have started - check /var/log/agentsh/server.log"
 fi
 
-# Step 9: Create a persistent session
+# Step 9: Detect platform capabilities
+log_info "Detecting platform capabilities..."
+agentsh detect 2>&1 | tee /var/log/agentsh/detect.log || log_warn "Detect command failed"
+
+# Step 10: Create a persistent session
 log_info "Creating persistent session..."
 SESSION_JSON=$(agentsh session create --workspace /home/sprite --json 2>/dev/null)
 SESSION_ID=$(echo "$SESSION_JSON" | grep -o '"id": *"[^"]*"' | head -1 | sed 's/"id": *"//' | sed 's/"$//')

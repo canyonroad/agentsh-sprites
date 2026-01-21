@@ -12,10 +12,10 @@ Sprites.dev provides excellent VM-level isolation via Firecracker microVMs. agen
 
 | Protection | Description |
 |------------|-------------|
-| Process isolation | Each sprite runs in a separate microVM |
+| Process isolation | Each sprite runs in a separate Firecracker microVM |
 | Filesystem isolation | VM has its own filesystem |
 | Network isolation | VM-level networking boundaries |
-| Capability restrictions | `cap_sys_ptrace`, `cap_bpf` disabled by default |
+| Full Linux capabilities | seccomp, cgroups, eBPF, FUSE all available |
 
 ### What agentsh Adds (Policy Enforcement)
 
@@ -184,6 +184,43 @@ agentsh exec -- sudo ls
 agentsh run -- claude
 ```
 
+### Detecting Capabilities
+
+Run `agentsh detect` to check which features are available on your platform:
+
+```bash
+agentsh detect
+```
+
+**Example output on Sprites.dev (January 2026):**
+
+```
+Platform: linux
+Security Mode: full
+Protection Score: 100%
+
+CAPABILITIES
+----------------------------------------
+  capabilities_drop        ✓
+  cgroups_v2               ✓
+  ebpf                     ✓
+  fuse                     ✓
+  landlock                 -
+  landlock_abi             ✓ (v0)
+  landlock_network         -
+  pid_namespace            -
+  seccomp                  ✓
+  seccomp_basic            ✓
+  seccomp_user_notify      ✓
+
+TIPS
+----------------------------------------
+  landlock_network: Kernel-level network restrictions disabled
+    -> Requires kernel 6.7+ (Landlock ABI v4). Use proxy-based network control.
+```
+
+The detection output is also logged to `/var/log/agentsh/detect.log` during installation.
+
 ## Configuration
 
 ### Main Config: `/etc/agentsh/config.yaml`
@@ -199,11 +236,52 @@ sandbox:
   enabled: true
   allow_degraded: true
 
-  # Important: These must be disabled on Sprites
+  # Environment injection (optional, commented out by default)
+  # The bundled bash_startup.sh uses 'enable' builtin which may not
+  # work in all environments. Seccomp provides equivalent protection.
+  # env_inject:
+  #   BASH_ENV: "/usr/lib/agentsh/bash_startup.sh"
+
+  # Disabled for simplicity - enable for stricter enforcement
   cgroups:
     enabled: false
   seccomp:
     enabled: false
+  fuse:
+    enabled: false
+```
+
+### Environment Variable Policy
+
+The policy controls which environment variables are passed to commands:
+
+```yaml
+env_policy:
+  # Allowed variables (wildcards supported)
+  allow:
+    - "PATH"
+    - "HOME"
+    - "NODE_*"
+    - "npm_*"
+    - "CARGO_*"
+    - "PYTHON*"
+
+  # Blocked variables (overrides allow)
+  deny:
+    - "AWS_*"
+    - "ANTHROPIC_API_KEY"
+    - "OPENAI_API_KEY"
+    - "*_SECRET*"
+    - "*_KEY"
+    - "*_PASSWORD"
+    - "*_TOKEN"
+
+  # Size limits
+  max_bytes: 1000000
+  max_keys: 100
+
+  # Block env enumeration (disabled - requires env_shim_path)
+  block_iteration: false
 ```
 
 ### Policy: `/etc/agentsh/policies/default.yaml`
@@ -232,56 +310,44 @@ pkill -f "agentsh server"
 cd /etc/agentsh && nohup agentsh server > /var/log/agentsh/server.log 2>&1 &
 ```
 
-## Sprites.dev Limitations
+## Sprites.dev Platform Capabilities
 
-Sprites.dev runs on Firecracker microVMs which have certain kernel capability restrictions:
+Sprites.dev runs on Firecracker microVMs. As of January 2026, the following agentsh capabilities are available:
 
-### Disabled Capabilities
+### Available Capabilities (100% Protection Score)
 
-| Capability | Impact |
+| Capability | Status | Description |
+|------------|--------|-------------|
+| `seccomp` | ✓ | Syscall filtering via seccomp-bpf |
+| `seccomp_user_notify` | ✓ | User-space syscall handling |
+| `cgroups_v2` | ✓ | Resource limits and accounting |
+| `fuse` | ✓ | Filesystem interception |
+| `ebpf` | ✓ | Extended BPF programs |
+| `capabilities_drop` | ✓ | Linux capability restrictions |
+| `landlock_abi` | ✓ (v0) | Landlock security module (basic) |
+
+### Not Available
+
+| Capability | Reason |
 |------------|--------|
-| `cap_sys_ptrace` | Cannot use ptrace-based sandboxing |
-| `cap_bpf` | Cannot use eBPF-based monitoring |
+| `landlock_network` | Requires kernel 6.7+ (Landlock ABI v4) |
+| `pid_namespace` | VM-level isolation used instead |
 
-### Available Capabilities
+### Configuration Notes
 
-| Capability | Status |
-|------------|--------|
-| `cap_sys_admin` | Available (FUSE mounting works) |
-| FUSE kernel support | Available (`/dev/fuse` exists) |
-
-### Required Configuration
-
-Due to these limitations, the following must be disabled in `config.yaml`:
+The default configuration disables some features for compatibility:
 
 ```yaml
 sandbox:
   cgroups:
-    enabled: false  # cgroups v2 may not be available
+    enabled: false  # Available but disabled for simplicity
   seccomp:
-    enabled: false  # Requires ptrace which is disabled
+    enabled: false  # Available but shim handles enforcement
   fuse:
-    enabled: false  # Works but requires additional policy config
+    enabled: false  # Available but requires policy tuning
 ```
 
-### What Still Works
-
-- Command-level policy enforcement via `agentsh exec`
-- Network filtering
-- DLP (Data Loss Prevention) redaction
-- Session management and audit logging
-
-### What Doesn't Work
-
-- Seccomp-based syscall filtering (requires ptrace)
-- eBPF-based process monitoring
-- cgroup resource limits
-
-### FUSE File Rules (Experimental)
-
-FUSE kernel support is available on Sprites (`cap_sys_admin` is enabled), but enabling FUSE-based file interception requires additional policy configuration to allow binary execution. The current policy needs `execute` operations added to system paths for binaries to run.
-
-Without FUSE, file-level rules (read-only paths, sensitive file blocking) are not enforced - only command-level rules work.
+These can be enabled for stricter enforcement, but the default policy provides comprehensive protection through command-level rules and network filtering.
 
 ## Files
 

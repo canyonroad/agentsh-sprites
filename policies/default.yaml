@@ -13,6 +13,72 @@ description: |
   - Fly.io internal network blocked
 
 # =============================================================================
+# ENVIRONMENT VARIABLE POLICY
+# =============================================================================
+
+env_policy:
+  # Variables allowed to pass through to commands
+  allow:
+    - "PATH"
+    - "HOME"
+    - "LANG"
+    - "TERM"
+    - "USER"
+    - "SHELL"
+    - "PWD"
+    - "OLDPWD"
+    - "EDITOR"
+    - "VISUAL"
+    - "PAGER"
+    - "TZ"
+    - "LC_*"
+    - "NODE_*"
+    - "npm_*"
+    - "PYTHON*"
+    - "VIRTUAL_ENV"
+    - "CARGO_*"
+    - "RUSTUP_*"
+    - "GOPATH"
+    - "GOROOT"
+    - "GO111MODULE"
+
+  # Variables explicitly blocked (overrides allow)
+  deny:
+    - "AWS_*"
+    - "AZURE_*"
+    - "GOOGLE_*"
+    - "GCP_*"
+    - "GITHUB_TOKEN"
+    - "GITHUB_PAT"
+    - "GH_TOKEN"
+    - "ANTHROPIC_API_KEY"
+    - "OPENAI_API_KEY"
+    - "OPENAI_*_KEY"
+    - "*_SECRET*"
+    - "*_KEY"
+    - "*_PASSWORD"
+    - "*_TOKEN"
+    - "*_CREDENTIALS"
+    - "NPM_TOKEN"
+    - "NODE_AUTH_TOKEN"
+    - "PYPI_TOKEN"
+    - "CARGO_REGISTRY_TOKEN"
+    - "DATABASE_URL"
+    - "DB_*"
+    - "REDIS_*"
+    - "MONGO_*"
+    - "MYSQL_*"
+    - "POSTGRES_*"
+
+  # Size limits
+  max_bytes: 1000000
+  max_keys: 100
+
+  # Block env enumeration attempts (env, printenv, /proc/*/environ)
+  # Note: Disabled on Sprites - requires env_shim_path which isn't bundled
+  block_iteration: false
+
+# =============================================================================
 # FILE OPERATION RULES
 # =============================================================================
 
@@ -473,7 +539,7 @@ command_rules:
     commands:
       - rm
     args_patterns:
-      - "-r"
+      - "-[^-]*r"        # Matches -r, -rf, -fr, etc.
       - "--recursive"
     decision: deny
     message: "Recursive delete blocked. Files can be removed individually."

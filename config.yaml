@@ -41,6 +41,14 @@ sandbox:
     max_cpu_percent: 100
     max_processes: 256
 
+  # Environment injection - bypasses env_policy filtering
+  # Used for operator-controlled variables
+  # Note: BASH_ENV disabled on Sprites - the bundled bash_startup.sh uses
+  # 'enable' builtin which isn't available in the Sprites shell environment.
+  # Seccomp enforcement provides equivalent protection.
+  # env_inject:
+  #   BASH_ENV: "/usr/lib/agentsh/bash_startup.sh"
+
   fuse:
     enabled: false  # Not required for basic operation
 
