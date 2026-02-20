@@ -50,7 +50,8 @@ sandbox:
   #   BASH_ENV: "/usr/lib/agentsh/bash_startup.sh"
 
   fuse:
-    enabled: false  # Not required for basic operation
+    enabled: true
+    deferred: true
 
   network:
     enabled: true
@@ -60,9 +61,8 @@ sandbox:
   cgroups:
     enabled: false  # May not be available in Firecracker
 
-  # Seccomp/ptrace not available in Sprites VM (cap_sys_ptrace disabled)
   seccomp:
-    enabled: false
+    enabled: true
 
 proxy:
   mode: "embedded"

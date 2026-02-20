@@ -3,7 +3,7 @@
 # https://github.com/canyonroad/agentsh-sprites
 set -euo pipefail
 
-AGENTSH_VERSION="${AGENTSH_VERSION:-0.8.10}"
+AGENTSH_VERSION="${AGENTSH_VERSION:-0.10.2}"
 AGENTSH_REPO="https://github.com/canyonroad/agentsh"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -73,6 +73,32 @@ chmod 644 /etc/agentsh/policies/default.yaml
 chmod 755 /var/lib/agentsh/sessions
 chmod 755 /var/lib/agentsh/quarantine
 chmod 755 /var/log/agentsh
+# Session dir must be writable by the sprite user for FUSE mounts
+SPRITE_USER="${SPRITE_USER:-sprite}"
+if id "$SPRITE_USER" &>/dev/null; then
+    chown -R "$SPRITE_USER:$SPRITE_USER" /var/lib/agentsh/sessions
+fi
+
+# Step 5b: Set up FUSE prerequisites (if fuse3 available)
+# Note: fuse3 is not installed by default because agentsh-stub is not yet
+# shipped in the agentsh package. FUSE config is enabled with allow_degraded
+# so agentsh gracefully falls back when fuse3/fusermount3 is not available.
+# When agentsh ships agentsh-stub, add fuse3 to apt dependencies above.
+if command -v fusermount3 &>/dev/null; then
+    log_info "Setting up FUSE prerequisites..."
+    # /etc/mtab is needed by fusermount3
+    if [[ ! -e /etc/mtab ]]; then
+        ln -sf /proc/self/mounts /etc/mtab
+    fi
+    # allow_other is needed for agentsh FUSE mounts
+    if [[ ! -f /etc/fuse.conf ]] || ! grep -q "user_allow_other" /etc/fuse.conf 2>/dev/null; then
+        echo "user_allow_other" > /etc/fuse.conf
+    fi
+    # Ensure /dev/fuse is accessible
+    if [[ -e /dev/fuse ]]; then
+        chmod 666 /dev/fuse
+    fi
+fi
 
 # Step 6: Install shell shim
 log_info "Installing shell shim..."

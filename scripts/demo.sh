@@ -188,6 +188,25 @@ run_test() {
     echo "TEST:$name:$cmd:$expected:$result"
 }
 
+run_policy_test() {
+    local name="$1"
+    local op="$2"
+    local path="$3"
+    local expected="$4"  # allow or deny
+
+    local session_flag=""
+    if [[ -n "${AGENTSH_SESSION_ID:-}" ]]; then
+        session_flag="--session $AGENTSH_SESSION_ID"
+    fi
+
+    local output
+    output=$(agentsh debug policy-test --op "$op" --path "$path" $session_flag 2>&1)
+    local decision
+    decision=$(echo "$output" | grep "^Decision:" | awk '{print tolower($2)}')
+
+    echo "TEST:$name:policy-test --op $op --path $path:$expected:$decision"
+}
+
 # Safe commands (should be allowed)
 run_test "List files" "/bin/ls /" "allowed"
 run_test "Echo command" "/bin/echo hello" "allowed"
@@ -199,6 +218,8 @@ run_test "Hostname command" "/bin/hostname" "allowed"
 run_test "sudo command" "sudo ls" "denied"
 run_test "su command" "su -" "denied"
 run_test "chroot command" "chroot /" "denied"
+run_test "nsenter command" "nsenter --help" "denied"
+run_test "unshare command" "unshare --help" "denied"
 
 # Sprites CLI (should be denied)
 run_test "sprite list" "sprite list" "denied"
@@ -207,19 +228,92 @@ run_test "sprite console" "sprite console" "denied"
 # Network tools (should be denied)
 run_test "netcat" "nc -h" "denied"
 run_test "ssh" "ssh localhost" "denied"
+run_test "telnet" "telnet localhost" "denied"
+run_test "scp" "scp /dev/null localhost" "denied"
+run_test "rsync" "rsync --help" "denied"
 
 # System commands (should be denied)
 run_test "systemctl" "systemctl status" "denied"
 run_test "kill" "kill -0 1" "denied"
+run_test "killall" "killall -l" "denied"
+run_test "pkill" "pkill --help" "denied"
+run_test "shutdown" "shutdown --help" "denied"
+run_test "reboot" "reboot --help" "denied"
+run_test "mount" "mount -l" "denied"
+run_test "dd command" "dd if=/dev/zero of=/dev/null count=0" "denied"
 
 # File operations via allowed commands (tests command rules, not file rules)
-# Note: File-level rules (read-only, sensitive files) require FUSE which needs additional config
 run_test "List directory" "/bin/ls /" "allowed"
 run_test "Read file" "/bin/cat /etc/hosts" "allowed"
 run_test "Create file" "/usr/bin/touch /tmp/agentsh-test-file" "allowed"
 
-# rm -rf is blocked by command rule (recursive delete protection)
+# Recursive delete variants - all should be blocked
 run_test "rm -rf blocked" "rm -rf /tmp/test-dir" "denied"
+run_test "rm -r blocked" "rm -r /tmp/test-dir" "denied"
+run_test "rm --recursive blocked" "rm --recursive /tmp/test-dir" "denied"
+
+# Single file rm is allowed (not recursive)
+# Creates file first, then removes it - tests that non-recursive rm works
+run_test "rm single file" "rm -f /tmp/agentsh-test-file" "allowed"
+
+# Package install requires approval (denied in non-interactive mode)
+run_test "npm install blocked" "npm install express" "denied"
+run_test "pip install blocked" "pip3 install requests" "denied"
+
+# File policy tests (via agentsh debug policy-test)
+# These verify the FUSE/seccomp file rules evaluate correctly
+# Note: ${PROJECT_ROOT} and ${HOME} variables in policy rules require
+# runtime session context to resolve. Tests below use literal paths
+# that match non-variable rules.
+
+# Temp directories
+run_policy_test "tmp write" "file_write" "/tmp/test" "allow"
+run_policy_test "var tmp write" "file_write" "/var/tmp/test" "allow"
+
+# System paths (read-only)
+run_policy_test "system read" "file_read" "/usr/bin/node" "allow"
+run_policy_test "system write blocked" "file_write" "/usr/bin/test" "deny"
+run_policy_test "lib read allowed" "file_read" "/lib/x86_64-linux-gnu/libc.so.6" "allow"
+run_policy_test "lib write blocked" "file_write" "/lib/test" "deny"
+run_policy_test "bin read allowed" "file_read" "/bin/ls" "allow"
+run_policy_test "sbin write blocked" "file_write" "/sbin/test" "deny"
+
+# /etc minimal read (only specific files allowed)
+run_policy_test "etc hosts readable" "file_read" "/etc/hosts" "allow"
+run_policy_test "etc resolv readable" "file_read" "/etc/resolv.conf" "allow"
+run_policy_test "etc ssl certs readable" "file_read" "/etc/ssl/certs/ca-certificates.crt" "allow"
+run_policy_test "etc shadow blocked" "file_read" "/etc/shadow" "deny"
+run_policy_test "etc passwd blocked" "file_read" "/etc/passwd" "deny"
+run_policy_test "etc write blocked" "file_write" "/etc/test" "deny"
+
+# Sprites folder (read-only)
+run_policy_test "sprite folder read" "file_read" "/.sprite/bin/test" "allow"
+run_policy_test "sprite folder write blocked" "file_write" "/.sprite/test" "deny"
+
+# Sensitive paths
+run_policy_test "proc blocked" "file_read" "/proc/1/cmdline" "deny"
+run_policy_test "proc environ blocked" "file_read" "/proc/1/environ" "deny"
+run_policy_test "sys blocked" "file_read" "/sys/kernel/version" "deny"
+
+# Credential paths (approve = allow when approvals disabled)
+run_policy_test "ssh keys protected" "file_read" "/root/.ssh/id_rsa" "allow"
+run_policy_test "aws creds protected" "file_read" "/root/.aws/credentials" "allow"
+run_policy_test "env file protected" "file_read" "/home/sprite/.env" "allow"
+
+# Cache paths (read-only)
+run_policy_test "npm cache readable" "file_read" "/root/.npm/test" "allow"
+run_policy_test "cargo cache readable" "file_read" "/root/.cargo/test" "allow"
+run_policy_test "cache dir readable" "file_read" "/root/.cache/test" "allow"
+
+# Dangerous binaries
+run_policy_test "sudo binary blocked" "file_read" "/usr/bin/sudo" "deny"
+run_policy_test "su binary blocked" "file_read" "/usr/bin/su" "deny"
+run_policy_test "pkexec binary blocked" "file_read" "/usr/bin/pkexec" "deny"
+run_policy_test "nsenter binary blocked" "file_read" "/usr/bin/nsenter" "deny"
+
+# Default deny (catch-all)
+run_policy_test "var write blocked" "file_write" "/var/test" "deny"
+run_policy_test "root home blocked" "file_read" "/root/test" "deny"
 
 # Cleanup
 rm -f /tmp/agentsh-test-file 2>/dev/null || true
@@ -262,23 +356,56 @@ display_category() {
         "List files"|"Echo command"|"Show current directory"|"Date command"|"Hostname command")
             new_cat="Safe Commands (should be ALLOWED)"
             ;;
-        "sudo command"|"su command"|"chroot command")
+        "sudo command"|"su command"|"chroot command"|"nsenter command"|"unshare command")
             new_cat="Privilege Escalation (should be DENIED)"
             ;;
         "sprite list"|"sprite console")
             new_cat="Sprites CLI (should be DENIED)"
             ;;
-        "netcat"|"ssh")
+        "netcat"|"ssh"|"telnet"|"scp"|"rsync")
             new_cat="Network Tools (should be DENIED)"
             ;;
-        "systemctl"|"kill")
+        "systemctl"|"kill"|"killall"|"pkill"|"shutdown"|"reboot"|"mount"|"dd command")
             new_cat="System Commands (should be DENIED)"
             ;;
         "List directory"|"Read file"|"Create file")
             new_cat="File Operations via Commands (should be ALLOWED)"
             ;;
-        "rm -rf blocked")
-            new_cat="Dangerous File Operations (should be DENIED)"
+        "rm -rf blocked"|"rm -r blocked"|"rm --recursive blocked")
+            new_cat="Recursive Delete (should be DENIED)"
+            ;;
+        "rm single file")
+            new_cat="Single File Delete (should be ALLOWED)"
+            ;;
+        "npm install blocked"|"pip install blocked")
+            new_cat="Package Install (requires approval)"
+            ;;
+        "tmp write"|"var tmp write")
+            new_cat="File Policy: Temp Directories"
+            ;;
+        "system read"|"system write blocked"|"lib read allowed"|"lib write blocked"|"bin read allowed"|"sbin write blocked")
+            new_cat="File Policy: System Paths (read-only)"
+            ;;
+        "etc hosts readable"|"etc resolv readable"|"etc ssl certs readable"|"etc shadow blocked"|"etc passwd blocked"|"etc write blocked")
+            new_cat="File Policy: /etc Access (minimal read)"
+            ;;
+        "sprite folder read"|"sprite folder write blocked")
+            new_cat="File Policy: Sprites Folder (read-only)"
+            ;;
+        "proc blocked"|"proc environ blocked"|"sys blocked")
+            new_cat="File Policy: /proc and /sys (blocked)"
+            ;;
+        "ssh keys protected"|"aws creds protected"|"env file protected")
+            new_cat="File Policy: Credentials (approval required)"
+            ;;
+        "npm cache readable"|"cargo cache readable"|"cache dir readable")
+            new_cat="File Policy: Package Caches (read-only)"
+            ;;
+        "sudo binary blocked"|"su binary blocked"|"pkexec binary blocked"|"nsenter binary blocked")
+            new_cat="File Policy: Dangerous Binaries (blocked)"
+            ;;
+        "var write blocked"|"root home blocked")
+            new_cat="File Policy: Default Deny"
             ;;
     esac
 

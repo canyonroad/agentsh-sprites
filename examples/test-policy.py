@@ -127,6 +127,30 @@ class PolicyTester:
             print(f"  \033[33m!\033[0m {description} (error: {e})")
             self.warnings += 1
 
+    def run_policy_test(self, description: str, op: str, path: str, expected: str):
+        """Test file policy evaluation via agentsh debug policy-test."""
+        try:
+            result = subprocess.run(
+                ["agentsh", "debug", "policy-test", "--op", op, "--path", path],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            decision = ""
+            for line in result.stdout.splitlines():
+                if line.startswith("Decision:"):
+                    decision = line.split(None, 1)[1].strip().lower()
+                    break
+            if decision == expected:
+                print(f"  \033[32m✓\033[0m {description} ({decision})")
+                self.passed += 1
+            else:
+                print(f"  \033[31m✗\033[0m {description} (expected: {expected}, got: {decision})")
+                self.failed += 1
+        except Exception as e:
+            print(f"  \033[33m!\033[0m {description} (error: {e})")
+            self.warnings += 1
+
     def run_tests(self):
         """Run all policy tests."""
         print("\n=== agentsh Policy Tests for Sprites ===\n")
@@ -144,17 +168,40 @@ class PolicyTester:
         print("\nTesting DENIED commands:")
         self.test_denied("sudo blocked", "sudo ls")
         self.test_denied("su blocked", "su -")
+        self.test_denied("chroot blocked", "chroot /")
+        self.test_denied("nsenter blocked", "nsenter --help")
+        self.test_denied("unshare blocked", "unshare --help")
         self.test_denied("sprite CLI blocked", "sprite list")
         self.test_denied("ssh blocked", "ssh localhost")
         self.test_denied("nc blocked", "nc -h")
+        self.test_denied("telnet blocked", "telnet localhost")
+        self.test_denied("scp blocked", "scp /dev/null localhost")
+        self.test_denied("rsync blocked", "rsync --help")
         self.test_denied("systemctl blocked", "systemctl status")
+        self.test_denied("kill blocked", "kill -0 1")
+        self.test_denied("killall blocked", "killall -l")
+        self.test_denied("pkill blocked", "pkill --help")
+        self.test_denied("shutdown blocked", "shutdown --help")
+        self.test_denied("reboot blocked", "reboot --help")
+        self.test_denied("mount blocked", "mount -l")
+        self.test_denied("dd blocked", "dd if=/dev/zero of=/dev/null count=0")
         # Note: Commands run via bash -c bypass command-level policy checks
         # because agentsh only sees bash.real as the top-level command.
         # Direct command execution IS blocked by policy.
         print("\nTesting direct command blocking:")
         self.test_denied_direct("rm -rf direct", ["rm", "-rf", "/tmp/nonexistent"])
+        self.test_denied_direct("rm -r direct", ["rm", "-r", "/tmp/nonexistent"])
+        self.test_denied_direct("rm --recursive direct", ["rm", "--recursive", "/tmp/nonexistent"])
         self.test_denied_direct("sudo direct", ["sudo", "ls"])
         self.test_denied_direct("ssh direct", ["ssh", "localhost"])
+        self.test_denied_direct("kill direct", ["kill", "-0", "1"])
+
+        print("\nTesting ALLOWED single-file operations:")
+        self.test_denied_direct("rm single file allowed", ["rm", "/tmp/nonexistent-ok"])  # Will fail (no file) but not policy-denied
+
+        print("\nTesting package install (requires approval):")
+        self.test_denied_direct("npm install blocked", ["npm", "install", "express"])
+        self.test_denied_direct("pip install blocked", ["pip3", "install", "requests"])
 
         print("\nTesting Sprites-specific rules:")
         self.test_file_readable("/.sprite readable", "/.sprite")
@@ -163,6 +210,61 @@ class PolicyTester:
         print("\nTesting file access:")
         self.test_file_readable("/tmp writable", "/tmp && touch /tmp/test-$$ && rm /tmp/test-$$")
         self.test_allowed("home dir access", "ls ~")
+
+        # File policy tests via agentsh debug policy-test
+        # These verify file rules evaluate correctly for FUSE/seccomp enforcement
+        # Note: ${PROJECT_ROOT} and ${HOME} policy variables require runtime
+        # session context; tests below use literal paths that match non-variable rules.
+
+        print("\nTesting file policy: temp directories:")
+        self.run_policy_test("tmp write allowed", "file_write", "/tmp/test", "allow")
+        self.run_policy_test("var tmp write allowed", "file_write", "/var/tmp/test", "allow")
+
+        print("\nTesting file policy: system paths (read-only):")
+        self.run_policy_test("system read allowed", "file_read", "/usr/bin/node", "allow")
+        self.run_policy_test("system write blocked", "file_write", "/usr/bin/test", "deny")
+        self.run_policy_test("lib read allowed", "file_read", "/lib/x86_64-linux-gnu/libc.so.6", "allow")
+        self.run_policy_test("lib write blocked", "file_write", "/lib/test", "deny")
+        self.run_policy_test("bin read allowed", "file_read", "/bin/ls", "allow")
+        self.run_policy_test("sbin write blocked", "file_write", "/sbin/test", "deny")
+
+        print("\nTesting file policy: /etc (minimal read):")
+        self.run_policy_test("/etc/hosts readable", "file_read", "/etc/hosts", "allow")
+        self.run_policy_test("/etc/resolv.conf readable", "file_read", "/etc/resolv.conf", "allow")
+        self.run_policy_test("/etc/ssl/certs readable", "file_read", "/etc/ssl/certs/ca-certificates.crt", "allow")
+        self.run_policy_test("/etc/shadow blocked", "file_read", "/etc/shadow", "deny")
+        self.run_policy_test("/etc/passwd blocked", "file_read", "/etc/passwd", "deny")
+        self.run_policy_test("/etc write blocked", "file_write", "/etc/test", "deny")
+
+        print("\nTesting file policy: Sprites folder (read-only):")
+        self.run_policy_test("/.sprite readable", "file_read", "/.sprite/bin/test", "allow")
+        self.run_policy_test("/.sprite write blocked", "file_write", "/.sprite/test", "deny")
+
+        print("\nTesting file policy: /proc and /sys (blocked):")
+        self.run_policy_test("/proc blocked", "file_read", "/proc/1/cmdline", "deny")
+        self.run_policy_test("/proc environ blocked", "file_read", "/proc/1/environ", "deny")
+        self.run_policy_test("/sys blocked", "file_read", "/sys/kernel/version", "deny")
+
+        print("\nTesting file policy: credentials (approval required):")
+        # approve = allow when approvals are disabled
+        self.run_policy_test("SSH keys protected", "file_read", "/root/.ssh/id_rsa", "allow")
+        self.run_policy_test("AWS creds protected", "file_read", "/root/.aws/credentials", "allow")
+        self.run_policy_test(".env file protected", "file_read", "/home/sprite/.env", "allow")
+
+        print("\nTesting file policy: package caches (read-only):")
+        self.run_policy_test("npm cache readable", "file_read", "/root/.npm/test", "allow")
+        self.run_policy_test("cargo cache readable", "file_read", "/root/.cargo/test", "allow")
+        self.run_policy_test("cache dir readable", "file_read", "/root/.cache/test", "allow")
+
+        print("\nTesting file policy: dangerous binaries (blocked):")
+        self.run_policy_test("sudo binary blocked", "file_read", "/usr/bin/sudo", "deny")
+        self.run_policy_test("su binary blocked", "file_read", "/usr/bin/su", "deny")
+        self.run_policy_test("pkexec binary blocked", "file_read", "/usr/bin/pkexec", "deny")
+        self.run_policy_test("nsenter binary blocked", "file_read", "/usr/bin/nsenter", "deny")
+
+        print("\nTesting file policy: default deny:")
+        self.run_policy_test("/var write blocked", "file_write", "/var/test", "deny")
+        self.run_policy_test("/root home blocked", "file_read", "/root/test", "deny")
 
         # Summary
         print("\n=== Test Summary ===")

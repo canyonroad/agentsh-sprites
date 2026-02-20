@@ -242,12 +242,14 @@ sandbox:
   # env_inject:
   #   BASH_ENV: "/usr/lib/agentsh/bash_startup.sh"
 
-  # Disabled for simplicity - enable for stricter enforcement
-  cgroups:
-    enabled: false
-  seccomp:
-    enabled: false
   fuse:
+    enabled: true
+    deferred: true
+
+  seccomp:
+    enabled: true
+
+  cgroups:
     enabled: false
 ```
 
@@ -335,19 +337,20 @@ Sprites.dev runs on Firecracker microVMs. As of January 2026, the following agen
 
 ### Configuration Notes
 
-The default configuration disables some features for compatibility:
+The default configuration enables FUSE and seccomp with graceful degradation:
 
 ```yaml
 sandbox:
-  cgroups:
-    enabled: false  # Available but disabled for simplicity
-  seccomp:
-    enabled: false  # Available but shim handles enforcement
   fuse:
-    enabled: false  # Available but requires policy tuning
+    enabled: true    # File operation interception in workspace
+    deferred: true   # Mount on first session use
+  seccomp:
+    enabled: true    # Syscall filtering
+  cgroups:
+    enabled: false   # Available but disabled for simplicity
 ```
 
-These can be enabled for stricter enforcement, but the default policy provides comprehensive protection through command-level rules and network filtering.
+FUSE and seccomp enable file policy evaluation for operations like blocking writes to system paths and protecting sensitive files. With `allow_degraded: true`, agentsh gracefully degrades when FUSE prerequisites (fuse3) are not available. Command-level and network-level enforcement works independently.
 
 ## Files
 
@@ -383,11 +386,12 @@ tail -f /var/log/agentsh/server.log
 
 ### Commands timing out
 
-If commands through the shim timeout, check that seccomp is disabled:
+If commands through the shim timeout, check the server logs and verify `allow_degraded` is enabled:
 
 ```bash
-grep -A2 seccomp /etc/agentsh/config.yaml
-# Should show: enabled: false
+tail -20 /var/log/agentsh/server.log
+grep allow_degraded /etc/agentsh/config.yaml
+# Should show: allow_degraded: true
 ```
 
 ### Policy not enforcing
