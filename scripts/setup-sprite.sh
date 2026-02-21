@@ -130,16 +130,12 @@ if ! sprite $SPRITE_ARGS exec -s "$SPRITE_NAME" -- echo "ok" &>/dev/null; then
 fi
 log_info "Connected to sprite: $SPRITE_NAME"
 
-# Helper to run commands on sprite
-# Use regular bash for initial setup (bash.real only exists after shim install)
+# Helper to run commands on sprite.
+# Uses sh which is untouched by the shim (--bash-only only shims /bin/bash).
+# Non-interactive commands via sprite exec also auto-bypass the bash shim
+# since v0.10.1+ detects non-TTY stdin.
 run_on_sprite() {
-    sprite $SPRITE_ARGS exec -s "$SPRITE_NAME" -- bash -c "$1"
-}
-
-# Helper to run commands bypassing shim (after shim is installed)
-run_on_sprite_raw() {
-    sprite $SPRITE_ARGS exec -s "$SPRITE_NAME" -- bash.real -c "$1" 2>/dev/null || \
-    sprite $SPRITE_ARGS exec -s "$SPRITE_NAME" -- bash -c "$1"
+    sprite $SPRITE_ARGS exec -s "$SPRITE_NAME" -- sh -c "$1"
 }
 
 # Check if agentsh is already installed
@@ -189,7 +185,7 @@ run_on_sprite "cd /tmp/agentsh-sprites && sudo ./install.sh" || {
 log_step "Verifying installation..."
 sleep 2
 
-if run_on_sprite_raw "curl -s http://127.0.0.1:18080/health 2>/dev/null | grep -q ok"; then
+if run_on_sprite "curl -s http://127.0.0.1:18080/health 2>/dev/null | grep -q ok"; then
     log_info "agentsh server is running"
 else
     log_warn "Server health check failed - may need manual start"

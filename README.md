@@ -104,8 +104,9 @@ agentsh provides runtime security by intercepting commands and enforcing policie
 ┌─────────────────────────────────────────┐
 │           AI Agent (Claude, etc.)       │
 ├─────────────────────────────────────────┤
-│              Shell Shim                 │
-│         (intercepts /bin/bash)          │
+│           Shell Shim (bash-only)        │
+│  /bin/bash → shim    /bin/sh → untouched│
+│  TTY: enforce policy  non-TTY: bypass   │
 ├─────────────────────────────────────────┤
 │           agentsh Server                │
 │    ┌─────────────────────────────┐      │
@@ -120,10 +121,20 @@ agentsh provides runtime security by intercepting commands and enforcing policie
 
 ### Components
 
-1. **Shell Shim**: Replaces `/bin/bash` and `/bin/sh` to intercept shell invocations
+1. **Shell Shim**: Replaces `/bin/bash` to intercept shell invocations (`--bash-only`; `/bin/sh` is left untouched)
 2. **agentsh Server**: Runs locally on port 18080, evaluates policies and executes commands
 3. **Policy Engine**: YAML-based rules for commands, files, and network access
 4. **Session Management**: Tracks agent sessions for audit and context
+
+### Non-PTY / Non-Interactive Behavior
+
+The shell shim (v0.10.1+) automatically detects when stdin is not a terminal and bypasses policy enforcement, executing the real shell directly. This means:
+
+- **`sprite exec` commands** from operators work without shim interference
+- **Binary data piped** through shell invocations is preserved byte-for-byte
+- **System scripts** using `#!/bin/sh` are unaffected (`--bash-only` leaves `/bin/sh` untouched)
+
+For sandbox platforms that execute commands non-interactively but still need policy enforcement (e.g., HTTP APIs), set `AGENTSH_SHIM_FORCE=1` to override the non-TTY bypass.
 
 ## What's Protected
 
@@ -192,7 +203,7 @@ Run `agentsh detect` to check which features are available on your platform:
 agentsh detect
 ```
 
-**Example output on Sprites.dev (January 2026):**
+**Example output on Sprites.dev (February 2026):**
 
 ```
 Platform: linux
@@ -252,6 +263,18 @@ sandbox:
   cgroups:
     enabled: false
 ```
+
+### Environment Variables
+
+These are set in `/etc/profile.d/agentsh.sh` during installation:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AGENTSH_SERVER` | `http://127.0.0.1:18080` | Server address |
+| `AGENTSH_SESSION_ID` | Auto-created | Session ID for policy enforcement |
+| `AGENTSH_CLIENT_TIMEOUT` | `5m` | HTTP client timeout for `agentsh exec` API calls |
+| `AGENTSH_SHIM_FORCE` | Unset | Set to `1` to enforce policy for non-interactive commands |
+| `AGENTSH_SHIM_DEBUG` | Unset | Set to `1` for shim debug output to stderr |
 
 ### Environment Variable Policy
 
@@ -314,7 +337,7 @@ cd /etc/agentsh && nohup agentsh server > /var/log/agentsh/server.log 2>&1 &
 
 ## Sprites.dev Platform Capabilities
 
-Sprites.dev runs on Firecracker microVMs. As of January 2026, the following agentsh capabilities are available:
+Sprites.dev runs on Firecracker microVMs. As of February 2026 (agentsh v0.10.4), the following capabilities are available:
 
 ### Available Capabilities (100% Protection Score)
 
@@ -352,6 +375,8 @@ sandbox:
 
 FUSE and seccomp enable file policy evaluation for operations like blocking writes to system paths and protecting sensitive files. With `allow_degraded: true`, agentsh gracefully degrades when FUSE prerequisites (fuse3) are not available. Command-level and network-level enforcement works independently.
 
+v0.10.4 includes latency optimizations for sandboxed environments: parallel DNS resolution, parallel capability detection, and reduced mount probe timeouts. These significantly reduce first-load latency when agentsh starts after a sprite checkpoint restore.
+
 ## Files
 
 ```
@@ -386,12 +411,32 @@ tail -f /var/log/agentsh/server.log
 
 ### Commands timing out
 
-If commands through the shim timeout, check the server logs and verify `allow_degraded` is enabled:
+The default HTTP client timeout is set to 5m via `AGENTSH_CLIENT_TIMEOUT` in `/etc/profile.d/agentsh.sh`. If commands still timeout, increase it:
+
+```bash
+# Increase timeout for very long operations
+export AGENTSH_CLIENT_TIMEOUT=10m
+
+# Or per-command
+AGENTSH_CLIENT_TIMEOUT=10m agentsh exec -- npm install
+```
+
+If commands through the shim timeout, also check the server logs and verify `allow_degraded` is enabled:
 
 ```bash
 tail -20 /var/log/agentsh/server.log
 grep allow_degraded /etc/agentsh/config.yaml
 # Should show: allow_degraded: true
+```
+
+### Non-interactive commands bypassing policy
+
+The shell shim (v0.10.1+) automatically bypasses policy for non-interactive (non-TTY) commands. This is by design - operator commands via `sprite exec` should not be subject to agent policies.
+
+If you need policy enforcement for non-interactive commands (e.g., HTTP API-driven sandbox execution):
+
+```bash
+export AGENTSH_SHIM_FORCE=1
 ```
 
 ### Policy not enforcing

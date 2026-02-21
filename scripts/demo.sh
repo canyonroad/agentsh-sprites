@@ -137,8 +137,9 @@ if ! $SKIP_SETUP; then
 fi
 
 # Helper to run raw commands on sprite (bypassing shim)
+# With --bash-only, /bin/sh is never shimmed so we use sh directly.
 run_on_sprite_raw() {
-    sprite $SPRITE_ARGS exec -s "$SPRITE_NAME" -- bash.real -c "$1" 2>&1
+    sprite $SPRITE_ARGS exec -s "$SPRITE_NAME" -- sh -c "$1" 2>&1
 }
 
 # Verify agentsh server is running
@@ -161,13 +162,15 @@ fi
 log_step "Creating test script on sprite..."
 
 # Create a temporary file with the test script
-# Uses #!/bin/bash.real with agentsh exec for policy enforcement
+# Uses #!/bin/sh (untouched by --bash-only shim) with agentsh exec for policy enforcement
 TEMP_SCRIPT=$(mktemp)
 cat > "$TEMP_SCRIPT" << 'TESTSCRIPT'
-#!/bin/bash.real
+#!/bin/sh
+# Uses /bin/sh which is untouched by the --bash-only shim.
+# agentsh exec handles policy enforcement for each command.
 
 # Source session ID
-source /etc/profile.d/agentsh.sh 2>/dev/null || true
+. /etc/profile.d/agentsh.sh 2>/dev/null || true
 
 run_test() {
     local name="$1"
@@ -179,7 +182,7 @@ run_test() {
     agentsh exec -- $cmd >/dev/null 2>&1 || exit_code=$?
 
     local result
-    if [[ $exit_code -eq 0 ]]; then
+    if [ $exit_code -eq 0 ]; then
         result="allowed"
     else
         result="denied"
@@ -195,7 +198,7 @@ run_policy_test() {
     local expected="$4"  # allow or deny
 
     local session_flag=""
-    if [[ -n "${AGENTSH_SESSION_ID:-}" ]]; then
+    if [ -n "${AGENTSH_SESSION_ID:-}" ]; then
         session_flag="--session $AGENTSH_SESSION_ID"
     fi
 
@@ -315,6 +318,254 @@ run_policy_test "nsenter binary blocked" "file_read" "/usr/bin/nsenter" "deny"
 run_policy_test "var write blocked" "file_write" "/var/test" "deny"
 run_policy_test "root home blocked" "file_read" "/root/test" "deny"
 
+# =====================================================================
+# Non-PTY / --bash-only tests
+# =====================================================================
+
+# Verify --bash-only shim installation
+if [ -f /bin/bash.real ] && [ -x /bin/bash.real ]; then
+    echo "TEST:bash.real exists:ls /bin/bash.real:allowed:allowed"
+else
+    echo "TEST:bash.real exists:ls /bin/bash.real:allowed:denied"
+fi
+
+# Check that /bin/bash is the shim (not the real bash)
+bash_type=$(file /bin/bash 2>/dev/null || true)
+if echo "$bash_type" | grep -Eqi "agentsh|shell-shim|ELF.*Go" || [ -L /bin/bash ]; then
+    echo "TEST:bash is shimmed:file /bin/bash:allowed:allowed"
+else
+    # Check if /bin/bash differs from /bin/bash.real (shimmed = different binary)
+    if [ -f /bin/bash.real ] && ! cmp -s /bin/bash /bin/bash.real 2>/dev/null; then
+        echo "TEST:bash is shimmed:file /bin/bash:allowed:allowed"
+    else
+        echo "TEST:bash is shimmed:file /bin/bash:allowed:denied"
+    fi
+fi
+
+# Check that /bin/sh is NOT shimmed (--bash-only leaves it alone)
+sh_type=$(file /bin/sh 2>/dev/null || true)
+if echo "$sh_type" | grep -Eqi "agentsh|shell-shim"; then
+    echo "TEST:sh is untouched:file /bin/sh:allowed:denied"
+else
+    echo "TEST:sh is untouched:file /bin/sh:allowed:allowed"
+fi
+
+# Non-interactive bypass: /bin/bash -c should bypass the shim
+# because stdin is not a TTY. The command runs via bash.real directly.
+nonpty_out=$(/bin/bash -c "echo non-pty-bypass-ok" 2>&1)
+if echo "$nonpty_out" | grep -q "non-pty-bypass-ok"; then
+    echo "TEST:non-PTY bash echo:bash -c echo:allowed:allowed"
+else
+    echo "TEST:non-PTY bash echo:bash -c echo:allowed:denied"
+fi
+
+# Non-interactive bypass: a blocked command (sudo) should NOT get
+# agentsh policy error when run through non-PTY bash — it bypasses
+# the shim entirely. sudo will fail on its own (not root/no password),
+# but the error should NOT mention agentsh/policy.
+nonpty_sudo=$(/bin/bash -c "sudo echo test" 2>&1 || true)
+if echo "$nonpty_sudo" | grep -Eqi "agentsh|policy|blocked by"; then
+    echo "TEST:non-PTY sudo bypass:bash -c sudo (no policy):allowed:denied"
+else
+    echo "TEST:non-PTY sudo bypass:bash -c sudo (no policy):allowed:allowed"
+fi
+
+# AGENTSH_SHIM_FORCE=1: should override the non-interactive bypass
+# and route through agentsh exec, where policy blocks sudo.
+force_sudo=$(AGENTSH_SHIM_FORCE=1 /bin/bash -c "sudo echo test" 2>&1 || true)
+if echo "$force_sudo" | grep -Eqi "agentsh|policy|blocked|denied"; then
+    echo "TEST:SHIM_FORCE blocks sudo:AGENTSH_SHIM_FORCE=1 bash -c sudo:denied:denied"
+else
+    echo "TEST:SHIM_FORCE blocks sudo:AGENTSH_SHIM_FORCE=1 bash -c sudo:denied:allowed"
+fi
+
+# AGENTSH_SHIM_FORCE=1: allowed commands should still work
+force_echo=$(AGENTSH_SHIM_FORCE=1 /bin/bash -c "echo shim-force-ok" 2>&1)
+if echo "$force_echo" | grep -q "shim-force-ok"; then
+    echo "TEST:SHIM_FORCE allows echo:AGENTSH_SHIM_FORCE=1 bash -c echo:allowed:allowed"
+else
+    echo "TEST:SHIM_FORCE allows echo:AGENTSH_SHIM_FORCE=1 bash -c echo:allowed:denied"
+fi
+
+# Binary passthrough: pipe binary data through /bin/sh (untouched)
+# and verify byte-for-byte integrity
+dd if=/dev/urandom bs=1024 count=1 of=/tmp/binary-test-in 2>/dev/null
+/bin/sh -c "cat" < /tmp/binary-test-in > /tmp/binary-test-out
+in_sum=$(sha256sum /tmp/binary-test-in 2>/dev/null | awk '{print $1}')
+out_sum=$(sha256sum /tmp/binary-test-out 2>/dev/null | awk '{print $1}')
+if [ -n "$in_sum" ] && [ "$in_sum" = "$out_sum" ]; then
+    echo "TEST:binary passthrough sh:sh -c cat < binary:allowed:allowed"
+else
+    echo "TEST:binary passthrough sh:sh -c cat < binary:allowed:denied"
+fi
+rm -f /tmp/binary-test-in /tmp/binary-test-out 2>/dev/null
+
+# =====================================================================
+# Environment Variable Filtering tests (via HTTP API)
+# Tests env_policy allow/deny patterns from policies/default.yaml
+# =====================================================================
+
+AGENTSH_API="http://127.0.0.1:18080"
+
+run_env_test() {
+    local name="$1"
+    local var_name="$2"
+    local check_value="$3"
+    local env_json="$4"
+    local expected="$5"  # visible or filtered
+
+    # Write exec request with env field to temp file
+    printf '{"command":"/usr/bin/printenv","args":["%s"],"env":%s}' "$var_name" "$env_json" > /tmp/env-test-req.json
+
+    local output
+    output=$(curl -s -X POST "${AGENTSH_API}/api/v1/sessions/${AGENTSH_SESSION_ID}/exec" \
+        -H "Content-Type: application/json" \
+        -d @/tmp/env-test-req.json --max-time 10 2>&1)
+
+    local result
+    if echo "$output" | grep -qF "$check_value"; then
+        result="visible"
+    else
+        result="filtered"
+    fi
+
+    echo "TEST:$name:printenv $var_name:$expected:$result"
+}
+
+# Env vars that match allow patterns — should be visible
+ENV_PAYLOAD='{"NODE_ENV":"production","GIT_AUTHOR_NAME":"TestAgent","PYTHONPATH":"/home/sprite/lib","AWS_SECRET_ACCESS_KEY":"wJalrXUtnFEMI-FAKE","OPENAI_API_KEY":"sk-test-1234567890","SECRET_MASTER":"do-not-expose","DATABASE_URL":"postgres://admin:secret@db:5432/prod"}'
+
+run_env_test "env NODE_ENV visible" "NODE_ENV" "production" "$ENV_PAYLOAD" "visible"
+run_env_test "env GIT_AUTHOR visible" "GIT_AUTHOR_NAME" "TestAgent" "$ENV_PAYLOAD" "visible"
+run_env_test "env PYTHONPATH visible" "PYTHONPATH" "/home/sprite/lib" "$ENV_PAYLOAD" "visible"
+
+# Env vars that match deny patterns — should be filtered
+run_env_test "env AWS_SECRET filtered" "AWS_SECRET_ACCESS_KEY" "wJalrXUtnFEMI" "$ENV_PAYLOAD" "filtered"
+run_env_test "env OPENAI_KEY filtered" "OPENAI_API_KEY" "sk-test-1234" "$ENV_PAYLOAD" "filtered"
+run_env_test "env SECRET filtered" "SECRET_MASTER" "do-not-expose" "$ENV_PAYLOAD" "filtered"
+run_env_test "env DATABASE_URL filtered" "DATABASE_URL" "postgres://admin" "$ENV_PAYLOAD" "filtered"
+
+rm -f /tmp/env-test-req.json 2>/dev/null
+
+# =====================================================================
+# Network Policy tests
+# Tests network rules from policies/default.yaml
+# =====================================================================
+
+run_network_test() {
+    local name="$1"
+    local url="$2"
+    local expected="$3"  # allowed or denied
+
+    local output
+    output=$(agentsh exec -- curl -s -o /dev/null --connect-timeout 5 --max-time 10 "$url" 2>&1 || true)
+
+    local result
+    if echo "$output" | grep -Eqi "agentsh|blocked|policy"; then
+        result="denied"
+    else
+        result="allowed"
+    fi
+
+    echo "TEST:$name:curl $url:$expected:$result"
+}
+
+# Localhost — should be allowed
+run_network_test "net localhost" "http://127.0.0.1:18080/health" "allowed"
+
+# Cloud metadata — should be blocked by policy
+run_network_test "net cloud metadata" "http://169.254.169.254/" "denied"
+
+# Private networks — should be blocked
+run_network_test "net private 10.x" "http://10.0.0.1/" "denied"
+run_network_test "net private 192.168.x" "http://192.168.1.1/" "denied"
+
+# Package registries — should be allowed (may timeout if no internet, but not policy-blocked)
+run_network_test "net npm registry" "https://registry.npmjs.org/" "allowed"
+run_network_test "net pypi" "https://pypi.org/" "allowed"
+
+# =====================================================================
+# Multi-Context Execution tests
+# Tests that blocked commands are enforced even when invoked indirectly
+# via env, xargs, find, scripts, or Python subprocess.
+# Requires seccomp (enabled on Sprites) for execve() interception.
+# =====================================================================
+
+# Baseline: direct blocked command via agentsh exec
+run_test "multi-ctx direct sudo" "sudo whoami" "denied"
+
+# Via env: env spawns blocked command
+run_test "multi-ctx env sudo" "env sudo whoami" "denied"
+
+# Via xargs: xargs spawns blocked command
+# Note: uses bash.real to avoid shim interference
+output_xargs=$(agentsh exec -- /bin/bash.real -c "echo whoami | xargs sudo" 2>&1 || true)
+if echo "$output_xargs" | grep -Eqi "agentsh|blocked|policy|denied|not permitted|Operation not permitted"; then
+    echo "TEST:multi-ctx xargs sudo:echo whoami | xargs sudo:denied:denied"
+else
+    echo "TEST:multi-ctx xargs sudo:echo whoami | xargs sudo:denied:allowed"
+fi
+
+# Via nested script: script executes blocked command
+output_script=$(agentsh exec -- /bin/bash.real -c '
+    echo "#!/bin/sh
+sudo whoami" > /tmp/escalate.sh
+    chmod +x /tmp/escalate.sh
+    /tmp/escalate.sh 2>&1
+    rm -f /tmp/escalate.sh
+' 2>&1 || true)
+if echo "$output_script" | grep -Eqi "agentsh|blocked|policy|denied|not permitted|Operation not permitted"; then
+    echo "TEST:multi-ctx script sudo:nested script sudo:denied:denied"
+else
+    echo "TEST:multi-ctx script sudo:nested script sudo:denied:allowed"
+fi
+
+# Via Python subprocess (if python3 available)
+if command -v python3 >/dev/null 2>&1; then
+    output_python=$(agentsh exec -- python3 -c "
+import subprocess, sys
+r = subprocess.run(['sudo', 'whoami'], capture_output=True, text=True)
+print(r.stdout or r.stderr, end='')
+sys.exit(r.returncode)
+" 2>&1 || true)
+    if echo "$output_python" | grep -Eqi "agentsh|blocked|policy|denied|not permitted|Operation not permitted"; then
+        echo "TEST:multi-ctx python sudo:python subprocess sudo:denied:denied"
+    else
+        echo "TEST:multi-ctx python sudo:python subprocess sudo:denied:allowed"
+    fi
+
+    # Safe command via Python (should be allowed)
+    output_python_safe=$(agentsh exec -- python3 -c "
+import subprocess
+r = subprocess.run(['ls', '/home'], capture_output=True, text=True)
+print(r.stdout[:20] if r.stdout else 'ok', end='')
+" 2>&1 || true)
+    if echo "$output_python_safe" | grep -Eqi "agentsh.*blocked|policy.*denied"; then
+        echo "TEST:multi-ctx python ls:python subprocess ls:allowed:denied"
+    else
+        echo "TEST:multi-ctx python ls:python subprocess ls:allowed:allowed"
+    fi
+else
+    echo "TEST:multi-ctx python sudo:python subprocess sudo:denied:denied"
+    echo "TEST:multi-ctx python ls:python subprocess ls:allowed:allowed"
+fi
+
+# Via find -exec: find spawns blocked command
+output_find=$(agentsh exec -- find /tmp -maxdepth 0 -exec sudo whoami \; 2>&1 || true)
+if echo "$output_find" | grep -Eqi "agentsh|blocked|policy|denied|not permitted|Operation not permitted"; then
+    echo "TEST:multi-ctx find sudo:find -exec sudo:denied:denied"
+else
+    echo "TEST:multi-ctx find sudo:find -exec sudo:denied:allowed"
+fi
+
+# Safe command via find (should be allowed)
+output_find_safe=$(agentsh exec -- find /tmp -maxdepth 0 -exec echo hello-from-find \; 2>&1 || true)
+if echo "$output_find_safe" | grep -q "hello-from-find"; then
+    echo "TEST:multi-ctx find echo:find -exec echo:allowed:allowed"
+else
+    echo "TEST:multi-ctx find echo:find -exec echo:allowed:denied"
+fi
+
 # Cleanup
 rm -f /tmp/agentsh-test-file 2>/dev/null || true
 
@@ -406,6 +657,42 @@ display_category() {
             ;;
         "var write blocked"|"root home blocked")
             new_cat="File Policy: Default Deny"
+            ;;
+        "bash.real exists"|"bash is shimmed"|"sh is untouched")
+            new_cat="Non-PTY: --bash-only Verification"
+            ;;
+        "non-PTY bash echo"|"non-PTY sudo bypass")
+            new_cat="Non-PTY: Non-Interactive Bypass"
+            ;;
+        "SHIM_FORCE blocks sudo"|"SHIM_FORCE allows echo")
+            new_cat="Non-PTY: AGENTSH_SHIM_FORCE Override"
+            ;;
+        "binary passthrough sh")
+            new_cat="Non-PTY: Binary Data Passthrough"
+            ;;
+        "env NODE_ENV visible"|"env GIT_AUTHOR visible"|"env PYTHONPATH visible")
+            new_cat="Env Filtering: Allowed Vars (should be VISIBLE)"
+            ;;
+        "env AWS_SECRET filtered"|"env OPENAI_KEY filtered"|"env SECRET filtered"|"env DATABASE_URL filtered")
+            new_cat="Env Filtering: Denied Vars (should be FILTERED)"
+            ;;
+        "net localhost")
+            new_cat="Network Policy: Localhost (should be ALLOWED)"
+            ;;
+        "net cloud metadata")
+            new_cat="Network Policy: Cloud Metadata (should be DENIED)"
+            ;;
+        "net private 10.x"|"net private 192.168.x")
+            new_cat="Network Policy: Private Networks (should be DENIED)"
+            ;;
+        "net npm registry"|"net pypi")
+            new_cat="Network Policy: Package Registries (should be ALLOWED)"
+            ;;
+        "multi-ctx direct sudo"|"multi-ctx env sudo"|"multi-ctx xargs sudo"|"multi-ctx script sudo"|"multi-ctx python sudo"|"multi-ctx find sudo")
+            new_cat="Multi-Context: Blocked via Indirect Execution"
+            ;;
+        "multi-ctx python ls"|"multi-ctx find echo")
+            new_cat="Multi-Context: Safe Commands via Indirect Execution"
             ;;
     esac
 

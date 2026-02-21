@@ -25,14 +25,22 @@ else
     fail "agentsh binary not found"
 fi
 
-# 2. Check shell shim
+# 2. Check shell shim (--bash-only: only /bin/bash is shimmed, /bin/sh is untouched)
 echo -n "Checking shell shim... "
-if [[ -L /bin/bash ]] || file /bin/bash 2>/dev/null | grep -q "agentsh"; then
-    pass "installed"
+if [ -L /bin/bash ] || file /bin/bash 2>/dev/null | grep -q "agentsh"; then
+    pass "installed (bash-only)"
 elif agentsh shim status &>/dev/null; then
     pass "installed (via status check)"
 else
     warn "shim status unclear - may still work"
+fi
+
+# 2b. Verify /bin/sh is untouched (--bash-only leaves sh alone)
+echo -n "Checking /bin/sh untouched... "
+if file /bin/sh 2>/dev/null | grep -q "agentsh"; then
+    warn "/bin/sh appears shimmed (expected untouched with --bash-only)"
+else
+    pass "/bin/sh is untouched"
 fi
 
 # 3. Check config file

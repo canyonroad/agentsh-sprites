@@ -3,7 +3,7 @@
 # https://github.com/canyonroad/agentsh-sprites
 set -euo pipefail
 
-AGENTSH_VERSION="${AGENTSH_VERSION:-0.10.2}"
+AGENTSH_VERSION="${AGENTSH_VERSION:-0.10.4}"
 AGENTSH_REPO="https://github.com/canyonroad/agentsh"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -101,10 +101,16 @@ if command -v fusermount3 &>/dev/null; then
 fi
 
 # Step 6: Install shell shim
-log_info "Installing shell shim..."
+# --bash-only: Only shim /bin/bash, leaving /bin/sh untouched.
+# This means system scripts using #!/bin/sh work without shim overhead,
+# and non-interactive commands (e.g. sprite exec) bypass the shim natively.
+# The v0.10.1+ shim also auto-bypasses when stdin is not a TTY, so even
+# commands run via shimmed bash from sprite exec work without policy
+# interference.
+log_info "Installing shell shim (bash-only)..."
 agentsh shim install-shell \
     --shim /usr/bin/agentsh-shell-shim \
-    --bash \
+    --bash-only \
     --i-understand-this-modifies-the-host
 
 # Step 7: Set up environment
@@ -138,12 +144,16 @@ if [[ -n "$SESSION_ID" ]]; then
     cat > /etc/profile.d/agentsh.sh << EOF
 export AGENTSH_SERVER="http://127.0.0.1:18080"
 export AGENTSH_SESSION_ID="$SESSION_ID"
+export AGENTSH_CLIENT_TIMEOUT="5m"
+# Set AGENTSH_SHIM_FORCE=1 to enforce policy even for non-interactive commands
+# (needed for sandbox APIs that execute commands without a PTY)
 EOF
     chmod 644 /etc/profile.d/agentsh.sh
 else
     log_warn "Could not create session - shim will create sessions on demand"
     cat > /etc/profile.d/agentsh.sh << 'EOF'
 export AGENTSH_SERVER="http://127.0.0.1:18080"
+export AGENTSH_CLIENT_TIMEOUT="5m"
 EOF
     chmod 644 /etc/profile.d/agentsh.sh
 fi
