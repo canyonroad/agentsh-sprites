@@ -63,6 +63,11 @@ sandbox:
 
   seccomp:
     enabled: true
+    execve:
+      enabled: true  # Deep process tree interception via seccomp user-notify
+
+  unix_sockets:
+    enabled: true
 
 proxy:
   mode: "embedded"
