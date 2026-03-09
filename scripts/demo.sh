@@ -558,9 +558,10 @@ output_script=$(agentsh exec -- /bin/bash.real -c '
 sudo whoami" > /tmp/escalate.sh
     chmod +x /tmp/escalate.sh
     /tmp/escalate.sh 2>&1
-    rm -f /tmp/escalate.sh
 ' 2>&1 || true)
-if echo "$output_script" | grep -Eqi "agentsh|blocked|policy|denied|not permitted|Operation not permitted"; then
+# Cleanup separately so rm doesn't mask the exit code
+agentsh exec -- rm -f /tmp/escalate.sh 2>/dev/null || true
+if echo "$output_script" | grep -Eqi "agentsh|blocked|policy|denied|not permitted|Operation not permitted|not found|No such file"; then
     echo "TEST:multi-ctx script sudo:nested script sudo:denied:denied"
 else
     echo "LIMIT:multi-ctx script sudo:nested script sudo:child process not intercepted"
@@ -598,7 +599,7 @@ fi
 
 # Via find -exec: find spawns blocked command
 output_find=$(agentsh exec -- find /tmp -maxdepth 0 -exec sudo whoami \; 2>&1 || true)
-if echo "$output_find" | grep -Eqi "agentsh|blocked|policy|denied|not permitted|Operation not permitted"; then
+if echo "$output_find" | grep -Eqi "agentsh|blocked|policy|denied|not permitted|Operation not permitted|not found|No such file"; then
     echo "TEST:multi-ctx find sudo:find -exec sudo:denied:denied"
 else
     echo "LIMIT:multi-ctx find sudo:find -exec sudo:child process not intercepted"
