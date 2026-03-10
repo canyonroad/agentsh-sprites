@@ -311,7 +311,7 @@ run_policy_test "etc hosts readable" "file_read" "/etc/hosts" "allow"
 run_policy_test "etc resolv readable" "file_read" "/etc/resolv.conf" "allow"
 run_policy_test "etc ssl certs readable" "file_read" "/etc/ssl/certs/ca-certificates.crt" "allow"
 run_policy_test "etc shadow blocked" "file_read" "/etc/shadow" "deny"
-run_policy_test "etc passwd blocked" "file_read" "/etc/passwd" "deny"
+run_policy_test "etc passwd readable" "file_read" "/etc/passwd" "allow"
 run_policy_test "etc write blocked" "file_write" "/etc/test" "deny"
 
 # Sprites folder (read-only)
@@ -617,6 +617,64 @@ fi
 # Cleanup
 rm -f /tmp/agentsh-test-file 2>/dev/null || true
 
+# =============================================================================
+# File I/O: System Path Write Protection (seccomp file_monitor)
+# =============================================================================
+# With seccomp file_monitor enabled and enforce_without_fuse=true, agentsh
+# intercepts file syscalls (openat, mkdirat, etc.) and blocks writes to
+# system paths based on file_rules policy.
+
+run_limit_test "file-io cp to etc" "cp /etc/hosts /etc/hosts_copy" "denied" "seccomp file_monitor not blocking writes"
+run_limit_test "file-io touch etc" "touch /etc/test" "denied" "seccomp file_monitor not blocking writes"
+run_limit_test "file-io mkdir etc" "mkdir /etc/agentsh-test-dir" "denied" "seccomp file_monitor not blocking writes"
+
+# tee writes to file via stdout redirect
+output_tee=$(agentsh exec -- /bin/bash.real -c "echo x | tee /usr/bin/evil" 2>&1 || true)
+if echo "$output_tee" | grep -Eqi "permission denied|denied|not permitted|Operation not permitted|read-only" || [ ! -f /usr/bin/evil ]; then
+    # Check if the file was actually created despite errors
+    if agentsh exec -- /bin/ls /usr/bin/evil >/dev/null 2>&1; then
+        echo "LIMIT:file-io tee usr-bin:echo x | tee /usr/bin/evil:seccomp file_monitor not blocking writes"
+    else
+        echo "TEST:file-io tee usr-bin:echo x | tee /usr/bin/evil:denied:denied"
+    fi
+else
+    echo "LIMIT:file-io tee usr-bin:echo x | tee /usr/bin/evil:seccomp file_monitor not blocking writes"
+fi
+
+# Python write to /etc
+output_pyetc=$(agentsh exec -- python3 -c "
+try:
+    f = open('/etc/evil-test', 'w')
+    f.write('test')
+    f.close()
+    print('WRITE_SUCCESS')
+except Exception as e:
+    print('WRITE_BLOCKED:', e)
+" 2>&1 || true)
+if echo "$output_pyetc" | grep -q "WRITE_SUCCESS"; then
+    echo "LIMIT:file-io python write etc:python3 open /etc write:seccomp file_monitor not blocking writes"
+    agentsh exec -- rm -f /etc/evil-test 2>/dev/null || true
+else
+    echo "TEST:file-io python write etc:python3 open /etc write:denied:denied"
+fi
+
+# Python write to /usr/bin
+output_pyusr=$(agentsh exec -- python3 -c "
+try:
+    f = open('/usr/bin/evil-test', 'w')
+    f.write('test')
+    f.close()
+    print('WRITE_SUCCESS')
+except Exception as e:
+    print('WRITE_BLOCKED:', e)
+" 2>&1 || true)
+if echo "$output_pyusr" | grep -q "WRITE_SUCCESS"; then
+    echo "LIMIT:file-io python write usr:python3 open /usr/bin write:seccomp file_monitor not blocking writes"
+    agentsh exec -- rm -f /usr/bin/evil-test 2>/dev/null || true
+else
+    echo "TEST:file-io python write usr:python3 open /usr/bin write:denied:denied"
+fi
+
 echo "TESTS_COMPLETE"
 TESTSCRIPT
 
@@ -686,7 +744,7 @@ display_category() {
         "system read"|"system write blocked"|"lib read allowed"|"lib write blocked"|"bin read allowed"|"sbin write blocked")
             new_cat="File Policy: System Paths (read-only)"
             ;;
-        "etc hosts readable"|"etc resolv readable"|"etc ssl certs readable"|"etc shadow blocked"|"etc passwd blocked"|"etc write blocked")
+        "etc hosts readable"|"etc resolv readable"|"etc ssl certs readable"|"etc shadow blocked"|"etc passwd readable"|"etc write blocked")
             new_cat="File Policy: /etc Access (minimal read)"
             ;;
         "sprite folder read"|"sprite folder write blocked")
@@ -742,6 +800,9 @@ display_category() {
             ;;
         "multi-ctx python ls"|"multi-ctx find echo")
             new_cat="Multi-Context: Safe Commands via Indirect Execution"
+            ;;
+        "file-io cp to etc"|"file-io touch etc"|"file-io mkdir etc"|"file-io tee usr-bin"|"file-io python write etc"|"file-io python write usr")
+            new_cat="File I/O: System Path Write Protection"
             ;;
     esac
 

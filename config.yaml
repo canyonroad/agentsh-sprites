@@ -65,6 +65,9 @@ sandbox:
     enabled: true
     execve:
       enabled: true  # Deep process tree interception via seccomp user-notify
+    file_monitor:
+      enabled: true
+      enforce_without_fuse: true  # Block file ops on paths not under FUSE mounts
 
   unix_sockets:
     enabled: true

@@ -137,6 +137,24 @@ file_rules:
       - "*"
     decision: allow
 
+  - name: allow-dev-nodes
+    description: Allow access to device nodes
+    paths:
+      - "/dev/null"
+      - "/dev/zero"
+      - "/dev/random"
+      - "/dev/urandom"
+      - "/dev/stdin"
+      - "/dev/stdout"
+      - "/dev/stderr"
+      - "/dev/fd/**"
+      - "/dev/pts/**"
+      - "/dev/tty"
+      - "/dev/fuse"
+    operations:
+      - "*"
+    decision: allow
+
   # ---------------------------------------------------------------------------
   # Sprites-specific: /.sprite folder (read-only for agents to learn)
   # ---------------------------------------------------------------------------
@@ -216,9 +234,29 @@ file_rules:
       - "/etc/ssl/certs/**"
       - "/etc/ca-certificates/**"
       - "/etc/localtime"
+      - "/etc/ld.so.cache"
+      - "/etc/ld.so.conf"
+      - "/etc/ld.so.conf.d/**"
+      - "/etc/nsswitch.conf"
+      - "/etc/gai.conf"
+      - "/etc/passwd"
+      - "/etc/group"
+      - "/etc/mtab"
     operations:
       - read
+      - open
       - stat
+    decision: allow
+
+  - name: allow-root-listing
+    description: Allow listing root directory
+    paths:
+      - "/"
+    operations:
+      - read
+      - open
+      - stat
+      - list
     decision: allow
 
   # ---------------------------------------------------------------------------
