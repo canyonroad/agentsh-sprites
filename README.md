@@ -1,6 +1,6 @@
 # agentsh + Sprites
 
-Runtime security governance for AI agents using [agentsh](https://github.com/canyonroad/agentsh) v0.15.2 with [Sprites.dev](https://sprites.dev) sandboxes.
+Runtime security governance for AI agents using [agentsh](https://github.com/canyonroad/agentsh) v0.15.3 with [Sprites.dev](https://sprites.dev) sandboxes.
 
 ## Why agentsh + Sprites?
 
@@ -93,7 +93,7 @@ Command Execution Flow
 
 ### Known Limitations
 
-**System path file I/O:** agentsh v0.15.2 enables seccomp `file_monitor` with `enforce_without_fuse: true`, which intercepts file syscalls (openat, mkdirat, etc.) and enforces `file_rules` on system paths. The policy includes rules for common system files needed by commands (ld.so.cache, nsswitch.conf, etc.). Some edge cases may still hit limitations — the file I/O tests use `run_limit_test` to document these gracefully.
+**System path file I/O:** agentsh v0.15.3 enables seccomp `file_monitor` with `enforce_without_fuse: true`, which intercepts file syscalls (openat, mkdirat, unlinkat, and legacy non-at variants on x86_64) and enforces `file_rules` on system paths. The policy includes rules for common system files needed by commands (ld.so.cache, nsswitch.conf, etc.). Some edge cases may still hit limitations — the file I/O tests use `run_limit_test` to document these gracefully.
 
 ## Quick Start
 
