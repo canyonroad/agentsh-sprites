@@ -1,6 +1,6 @@
 # agentsh + Sprites
 
-Runtime security governance for AI agents using [agentsh](https://github.com/canyonroad/agentsh) v0.15.0 with [Sprites.dev](https://sprites.dev) sandboxes.
+Runtime security governance for AI agents using [agentsh](https://github.com/canyonroad/agentsh) v0.15.1 with [Sprites.dev](https://sprites.dev) sandboxes.
 
 ## Why agentsh + Sprites?
 
