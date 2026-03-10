@@ -38,7 +38,7 @@ log_info "Installing agentsh v${AGENTSH_VERSION} for Sprites.dev"
 # Step 1: Install dependencies
 log_info "Installing dependencies..."
 apt-get update -qq
-apt-get install -y -qq curl libseccomp2 > /dev/null
+apt-get install -y -qq curl libseccomp2 fuse3 > /dev/null
 
 # Step 2: Download and install agentsh
 log_info "Downloading agentsh v${AGENTSH_VERSION}..."
@@ -79,11 +79,7 @@ if id "$SPRITE_USER" &>/dev/null; then
     chown -R "$SPRITE_USER:$SPRITE_USER" /var/lib/agentsh/sessions
 fi
 
-# Step 5b: Set up FUSE prerequisites (if fuse3 available)
-# Note: fuse3 is not installed by default because agentsh-stub is not yet
-# shipped in the agentsh package. FUSE config is enabled with allow_degraded
-# so agentsh gracefully falls back when fuse3/fusermount3 is not available.
-# When agentsh ships agentsh-stub, add fuse3 to apt dependencies above.
+# Step 5b: Set up FUSE prerequisites
 if command -v fusermount3 &>/dev/null; then
     log_info "Setting up FUSE prerequisites..."
     # /etc/mtab is needed by fusermount3
