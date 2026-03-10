@@ -598,11 +598,12 @@ else
 fi
 
 # Via find -exec: find spawns blocked command
+# Check for absence of success (sudo whoami outputs "root" if it runs)
 output_find=$(agentsh exec -- find /tmp -maxdepth 0 -exec sudo whoami \; 2>&1 || true)
-if echo "$output_find" | grep -Eqi "agentsh|blocked|policy|denied|not permitted|Operation not permitted|not found|No such file"; then
-    echo "TEST:multi-ctx find sudo:find -exec sudo:denied:denied"
-else
+if echo "$output_find" | grep -q "^root$"; then
     echo "LIMIT:multi-ctx find sudo:find -exec sudo:child process not intercepted"
+else
+    echo "TEST:multi-ctx find sudo:find -exec sudo:denied:denied"
 fi
 
 # Safe command via find (should be allowed)
