@@ -64,13 +64,26 @@ sandbox:
   seccomp:
     enabled: true
     execve:
-      enabled: true  # Deep process tree interception via seccomp user-notify
+      enabled: false  # ptrace handles execve interception
     file_monitor:
       enabled: true
       enforce_without_fuse: true  # Block file ops on paths not under FUSE mounts
 
-  unix_sockets:
+  ptrace:
     enabled: true
+    attach_mode: "children"
+    trace:
+      execve: true    # Deep process tree interception (replaces seccomp execve)
+      file: true      # File syscall interception (openat, unlinkat, etc.)
+      network: true   # Network syscall interception (connect, bind, sendto)
+      signal: true    # Signal syscall interception (kill, tkill, etc.)
+    performance:
+      seccomp_prefilter: true  # Inject BPF pre-filter to reduce overhead
+      max_tracees: 500
+      max_hold_ms: 5000
+
+  unix_sockets:
+    enabled: false  # Incompatible with full ptrace mode
 
 proxy:
   mode: "embedded"

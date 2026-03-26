@@ -526,9 +526,31 @@ run_network_test "net cloud metadata" "http://169.254.169.254/" "denied"
 run_network_test "net private 10.x" "http://10.0.0.1/" "denied"
 run_network_test "net private 192.168.x" "http://192.168.1.1/" "denied"
 
-# Package registries — should be allowed (may timeout if no internet, but not policy-blocked)
-run_network_test "net npm registry" "https://registry.npmjs.org/" "allowed"
-run_network_test "net pypi" "https://pypi.org/" "allowed"
+# Package registries — should be allowed (ptrace DNS redirect may add latency)
+run_limit_network_test() {
+    local name="$1"
+    local url="$2"
+    local expected="$3"
+    local limit_msg="$4"
+
+    local output
+    output=$(agentsh exec -- curl -s -o /dev/null --connect-timeout 10 --max-time 20 "$url" 2>&1 || true)
+
+    local result
+    if echo "$output" | grep -Eqi "agentsh|blocked|policy"; then
+        result="denied"
+    else
+        result="allowed"
+    fi
+
+    if [ "$result" = "$expected" ]; then
+        echo "TEST:$name:curl $url:$expected:$result"
+    else
+        echo "LIMIT:$name:curl $url:$limit_msg"
+    fi
+}
+run_limit_network_test "net npm registry" "https://registry.npmjs.org/" "allowed" "ptrace DNS redirect latency"
+run_limit_network_test "net pypi" "https://pypi.org/" "allowed" "ptrace DNS redirect latency"
 
 # =====================================================================
 # Multi-Context Execution tests

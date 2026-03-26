@@ -1,6 +1,6 @@
 # agentsh + Sprites
 
-Runtime security governance for AI agents using [agentsh](https://github.com/canyonroad/agentsh) v0.15.3 with [Sprites.dev](https://sprites.dev) sandboxes.
+Runtime security governance for AI agents using [agentsh](https://github.com/canyonroad/agentsh) v0.16.8 with [Sprites.dev](https://sprites.dev) sandboxes.
 
 ## Why agentsh + Sprites?
 
@@ -37,14 +37,15 @@ agentsh adds the governance layer that controls what agents can do inside the sa
 
 | Sprites Provides | agentsh Adds |
 |---|---|
-| VM-level process isolation | Command blocking (seccomp execve) |
-| Firecracker filesystem isolation | File I/O policy (FUSE on workspace) |
-| VM networking boundaries | Domain allowlist/blocklist |
+| VM-level process isolation | Command blocking (ptrace execve) |
+| Firecracker filesystem isolation | File I/O policy (FUSE + ptrace file) |
+| VM networking boundaries | Domain allowlist/blocklist (TCP proxy + ptrace network) |
 | Full Linux capabilities | Cloud metadata blocking |
 | | Environment variable filtering |
 | | Secret detection and redaction (DLP) |
 | | Sprites CLI escape prevention |
-| | Deep process tree interception (seccomp) |
+| | Deep process tree interception (ptrace) |
+| | Non-interactive policy enforcement (shim.conf) |
 | | LLM request auditing |
 | | Complete audit logging |
 
@@ -65,9 +66,10 @@ Command Execution Flow
                              │ allowed
                              ▼
                       ┌──────────────┐
-                      │ seccomp      │── blocked ──▶ EPERM
-                      │ (execve +    │
-                      │  child procs)│
+                      │ ptrace       │── blocked ──▶ EPERM
+                      │ (execve,     │
+                      │  file, net,  │
+                      │  signal)     │
                       └──────┬───────┘
                              │ allowed
                       ┌──────┴───────┐
@@ -84,7 +86,9 @@ Command Execution Flow
 | Layer | Mechanism | What It Protects |
 |---|---|---|
 | **Command Policy** | Shell shim + `agentsh exec` | Blocks `sudo`, `ssh`, `kill`, `nc`, `sprite`, etc. |
-| **Seccomp (execve)** | seccomp-bpf user-notify | Intercepts child process execution across the entire process tree — `env sudo`, `python -c subprocess.run(["sudo"])`, `find -exec sudo` are all caught |
+| **Ptrace (execve)** | ptrace syscall tracer | Intercepts child process execution across the entire process tree — `env sudo`, `python -c subprocess.run(["sudo"])`, `find -exec sudo` are all caught |
+| **Ptrace (network)** | ptrace connect/bind/sendto | Kernel-level network enforcement with DNS redirect and SNI rewrite, complementing the TCP intercept proxy |
+| **Ptrace (file)** | ptrace openat/unlinkat | Syscall-level file access interception alongside FUSE and seccomp file_monitor |
 | **Network** | TCP intercept proxy | Domain allowlist/blocklist, cloud metadata blocking, private network blocking |
 | **FUSE** | Workspace FUSE mount | File I/O policy on workspace directory (read/write/soft-delete) |
 | **Seccomp (file_monitor)** | seccomp-bpf user-notify | Intercepts file syscalls (openat, mkdirat, unlinkat) to enforce file_rules on system paths outside FUSE mounts |
@@ -93,7 +97,7 @@ Command Execution Flow
 
 ### Known Limitations
 
-**System path file I/O:** agentsh v0.15.3 enables seccomp `file_monitor` with `enforce_without_fuse: true`, which intercepts file syscalls (openat, mkdirat, unlinkat, and legacy non-at variants on x86_64) and enforces `file_rules` on system paths. The policy includes rules for common system files needed by commands (ld.so.cache, nsswitch.conf, etc.). Some edge cases may still hit limitations — the file I/O tests use `run_limit_test` to document these gracefully.
+**System path file I/O:** agentsh v0.16.8 enables seccomp `file_monitor` with `enforce_without_fuse: true`, which intercepts file syscalls (openat, mkdirat, unlinkat, and legacy non-at variants on x86_64) and enforces `file_rules` on system paths. The policy includes rules for common system files needed by commands (ld.so.cache, nsswitch.conf, etc.). Some edge cases may still hit limitations — the file I/O tests use `run_limit_test` to document these gracefully.
 
 ## Quick Start
 
@@ -172,7 +176,7 @@ AI agent runs:  bash -c "sudo whoami"
  └────────┘ └────────┘
 ```
 
-**Non-interactive bypass:** The shim automatically detects non-TTY stdin and bypasses policy. This means `sprite exec` operator commands work without interference, and binary data piped through the shell is preserved byte-for-byte. Set `AGENTSH_SHIM_FORCE=1` to override this for sandbox APIs that need policy enforcement on non-interactive commands.
+**Non-interactive bypass:** The shim automatically detects non-TTY stdin and bypasses policy. This means `sprite exec` operator commands work without interference, and binary data piped through the shell is preserved byte-for-byte. Set `AGENTSH_SHIM_FORCE=1` or use `/etc/agentsh/shim.conf` to override this for sandbox APIs that need policy enforcement on non-interactive commands.
 
 ## Platform Capabilities
 
@@ -181,18 +185,18 @@ The install script runs `agentsh detect` to probe the Sprites environment. Curre
 | Capability | Status | Notes |
 |---|---|---|
 | seccomp | ✓ | Full seccomp-bpf with user-notify |
-| seccomp execve | ✓ | Deep process tree interception |
+| ptrace | ✓ | **Active backend** — execve, file, network, signal tracing |
 | FUSE | ✓ | Workspace file I/O interception |
 | capabilities drop | ✓ | Privilege reduction |
 | cgroups v2 | ✓ | Resource limits |
-| eBPF | ✓ | Available for monitoring |
+| eBPF | - | Requires CAP_BPF and elevated privileges |
 | Landlock | - | Requires kernel 6.7+ for network ABI |
 
 ## Configuration
 
 Security policy is defined in two files:
 
-- **`config.yaml`** — Server configuration: network interception, DLP patterns, LLM proxy, FUSE settings, seccomp
+- **`config.yaml`** — Server configuration: network interception, DLP patterns, LLM proxy, FUSE settings, ptrace, seccomp
 - **`policies/default.yaml`** — Policy rules: command rules, network rules, file rules, environment policy
 
 Key environment variables (set in `/etc/profile.d/agentsh.sh`):
@@ -202,6 +206,8 @@ Key environment variables (set in `/etc/profile.d/agentsh.sh`):
 | `AGENTSH_CLIENT_TIMEOUT` | `5m` | HTTP client timeout for `agentsh exec` |
 | `AGENTSH_SHIM_FORCE` | Unset | Set `1` to enforce policy for non-interactive commands |
 | `AGENTSH_SHIM_DEBUG` | Unset | Set `1` for shim debug output to stderr |
+
+**Non-interactive enforcement:** v0.16.8 also supports `/etc/agentsh/shim.conf` as a file-based alternative to `AGENTSH_SHIM_FORCE`. This is useful for sandbox APIs that execute commands without a PTY and need policy enforcement without relying on environment variables.
 
 See the [agentsh documentation](https://github.com/canyonroad/agentsh) for the full policy reference.
 
