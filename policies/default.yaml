@@ -533,6 +533,7 @@ command_rules:
       - pwd
       - echo
       - date
+      - hostname
       - which
     decision: allow
 

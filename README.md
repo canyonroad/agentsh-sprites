@@ -1,6 +1,6 @@
 # agentsh + Sprites
 
-Runtime security governance for AI agents using [agentsh](https://github.com/canyonroad/agentsh) v0.16.8 with [Sprites.dev](https://sprites.dev) sandboxes.
+Runtime security governance for AI agents using [agentsh](https://github.com/canyonroad/agentsh) v0.16.9 with [Sprites.dev](https://sprites.dev) sandboxes.
 
 ## Why agentsh + Sprites?
 
@@ -97,7 +97,7 @@ Command Execution Flow
 
 ### Known Limitations
 
-**System path file I/O:** agentsh v0.16.8 enables seccomp `file_monitor` with `enforce_without_fuse: true`, which intercepts file syscalls (openat, mkdirat, unlinkat, and legacy non-at variants on x86_64) and enforces `file_rules` on system paths. The policy includes rules for common system files needed by commands (ld.so.cache, nsswitch.conf, etc.). Some edge cases may still hit limitations — the file I/O tests use `run_limit_test` to document these gracefully.
+**System path file I/O:** agentsh v0.16.9 enables seccomp `file_monitor` with `enforce_without_fuse: true`, which intercepts file syscalls (openat, mkdirat, unlinkat, and legacy non-at variants on x86_64) and enforces `file_rules` on system paths. The policy includes rules for common system files needed by commands (ld.so.cache, nsswitch.conf, etc.). Some edge cases may still hit limitations — the file I/O tests use `run_limit_test` to document these gracefully.
 
 ## Quick Start
 
@@ -207,7 +207,7 @@ Key environment variables (set in `/etc/profile.d/agentsh.sh`):
 | `AGENTSH_SHIM_FORCE` | Unset | Set `1` to enforce policy for non-interactive commands |
 | `AGENTSH_SHIM_DEBUG` | Unset | Set `1` for shim debug output to stderr |
 
-**Non-interactive enforcement:** v0.16.8 also supports `/etc/agentsh/shim.conf` as a file-based alternative to `AGENTSH_SHIM_FORCE`. This is useful for sandbox APIs that execute commands without a PTY and need policy enforcement without relying on environment variables.
+**Non-interactive enforcement:** v0.16.9 also supports `/etc/agentsh/shim.conf` as a file-based alternative to `AGENTSH_SHIM_FORCE`. This is useful for sandbox APIs that execute commands without a PTY and need policy enforcement without relying on environment variables.
 
 See the [agentsh documentation](https://github.com/canyonroad/agentsh) for the full policy reference.
 
