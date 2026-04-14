@@ -3,7 +3,7 @@
 # https://github.com/canyonroad/agentsh-sprites
 set -euo pipefail
 
-AGENTSH_VERSION="${AGENTSH_VERSION:-0.16.9}"
+AGENTSH_VERSION="${AGENTSH_VERSION:-0.18.1}"
 AGENTSH_REPO="https://github.com/canyonroad/agentsh"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
