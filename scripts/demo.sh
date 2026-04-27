@@ -99,9 +99,11 @@ if [[ -z "$SPRITE_NAME" ]]; then
 fi
 
 # Build sprite CLI args
-SPRITE_ARGS=""
+SPRITE_ARGS=()
+SPRITE_CMD_DISPLAY="sprite"
 if [[ -n "$ORG" ]]; then
-    SPRITE_ARGS="-o $ORG"
+    SPRITE_ARGS=(-o "$ORG")
+    SPRITE_CMD_DISPLAY="sprite -o $ORG"
 fi
 
 # Cleanup function
@@ -109,7 +111,7 @@ cleanup() {
     if ! $KEEP && [[ -n "$SPRITE_NAME" ]]; then
         echo ""
         log_step "Cleaning up: destroying sprite $SPRITE_NAME"
-        sprite $SPRITE_ARGS destroy -s "$SPRITE_NAME" --force 2>/dev/null || true
+        sprite "${SPRITE_ARGS[@]}" destroy -s "$SPRITE_NAME" --force 2>/dev/null || true
     fi
 }
 
@@ -127,19 +129,19 @@ echo ""
 if ! $SKIP_SETUP; then
     log_step "Setting up sprite: $SPRITE_NAME"
 
-    SETUP_ARGS=""
+    SETUP_ARGS=()
     if [[ -n "$ORG" ]]; then
-        SETUP_ARGS="-o $ORG"
+        SETUP_ARGS=(-o "$ORG")
     fi
 
-    "$SCRIPT_DIR/setup-sprite.sh" $SETUP_ARGS --create "$SPRITE_NAME"
+    "$SCRIPT_DIR/setup-sprite.sh" "${SETUP_ARGS[@]}" --create "$SPRITE_NAME"
     echo ""
 fi
 
 # Helper to run raw commands on sprite (bypassing shim)
 # With --bash-only, /bin/sh is never shimmed so we use sh directly.
 run_on_sprite_raw() {
-    sprite $SPRITE_ARGS exec -s "$SPRITE_NAME" -- sh -c "$1" 2>&1
+    sprite "${SPRITE_ARGS[@]}" exec -s "$SPRITE_NAME" -- sh -c "$1" 2>&1
 }
 
 # Verify agentsh server is running
@@ -904,8 +906,8 @@ echo ""
 
 if $KEEP; then
     echo -e "${BOLD}Sprite kept for manual testing:${NC}"
-    echo "  Connect: sprite $SPRITE_ARGS console -s $SPRITE_NAME"
-    echo "  Destroy: sprite $SPRITE_ARGS destroy -s $SPRITE_NAME"
+    echo "  Connect: $SPRITE_CMD_DISPLAY console -s $SPRITE_NAME"
+    echo "  Destroy: $SPRITE_CMD_DISPLAY destroy -s $SPRITE_NAME"
 else
     echo -e "${BOLD}Sprite will be destroyed on exit.${NC}"
     echo "Use --keep to preserve the sprite for manual testing."

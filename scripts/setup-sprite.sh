@@ -106,15 +106,17 @@ if [[ -z "$ORG" ]]; then
 fi
 
 # Build sprite CLI args
-SPRITE_ARGS=""
+SPRITE_ARGS=()
+SPRITE_CMD_DISPLAY="sprite"
 if [[ -n "$ORG" ]]; then
-    SPRITE_ARGS="-o $ORG"
+    SPRITE_ARGS=(-o "$ORG")
+    SPRITE_CMD_DISPLAY="sprite -o $ORG"
 fi
 
 # Create sprite if requested
 if $CREATE; then
     log_step "Creating sprite: $SPRITE_NAME"
-    if sprite $SPRITE_ARGS create "$SPRITE_NAME" 2>/dev/null; then
+    if sprite "${SPRITE_ARGS[@]}" create "$SPRITE_NAME" 2>/dev/null; then
         log_info "Sprite created successfully"
     else
         log_warn "Sprite may already exist, continuing..."
@@ -123,7 +125,7 @@ fi
 
 # Verify sprite exists
 log_step "Verifying sprite exists..."
-if ! sprite $SPRITE_ARGS exec -s "$SPRITE_NAME" -- echo "ok" &>/dev/null; then
+if ! sprite "${SPRITE_ARGS[@]}" exec -s "$SPRITE_NAME" -- echo "ok" &>/dev/null; then
     log_error "Cannot connect to sprite: $SPRITE_NAME"
     log_error "Make sure the sprite exists or use --create to create it"
     exit 1
@@ -135,7 +137,7 @@ log_info "Connected to sprite: $SPRITE_NAME"
 # Non-interactive commands via sprite exec also auto-bypass the bash shim
 # since v0.10.1+ detects non-TTY stdin.
 run_on_sprite() {
-    sprite $SPRITE_ARGS exec -s "$SPRITE_NAME" -- sh -c "$1"
+    sprite "${SPRITE_ARGS[@]}" exec -s "$SPRITE_NAME" -- sh -c "$1"
 }
 
 # Check if agentsh is already installed
@@ -197,8 +199,8 @@ log_info "Setup complete for sprite: $SPRITE_NAME"
 log_info "============================================"
 echo ""
 echo "To checkpoint this sprite (persist the setup):"
-echo "  sprite $SPRITE_ARGS checkpoint create -s $SPRITE_NAME"
+echo "  $SPRITE_CMD_DISPLAY checkpoint create -s $SPRITE_NAME"
 echo ""
 echo "To connect and use:"
-echo "  sprite $SPRITE_ARGS console -s $SPRITE_NAME"
+echo "  $SPRITE_CMD_DISPLAY console -s $SPRITE_NAME"
 echo ""
