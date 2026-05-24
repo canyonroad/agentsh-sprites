@@ -1,6 +1,6 @@
 # agentsh + Sprites
 
-Runtime security governance for AI agents using [agentsh](https://github.com/canyonroad/agentsh) v0.18.3 with [Sprites.dev](https://sprites.dev) sandboxes.
+Runtime security governance for AI agents using [agentsh](https://github.com/canyonroad/agentsh) v0.20.1 with [Sprites.dev](https://sprites.dev) sandboxes.
 
 ## Why agentsh + Sprites?
 
@@ -97,7 +97,13 @@ Command Execution Flow
 
 ### Known Limitations
 
-**System path file I/O:** agentsh v0.18.3 enables seccomp `file_monitor` with `enforce_without_fuse: true`, which intercepts file syscalls (openat, mkdirat, unlinkat, and legacy non-at variants on x86_64) and enforces `file_rules` on system paths. The v0.18.3 release also restores file-monitor configuration parity for `agentsh wrap`, while this integration continues to exercise enforcement through `agentsh exec` and the shell shim. The policy includes rules for common system files needed by commands (ld.so.cache, nsswitch.conf, etc.). Some edge cases may still hit limitations — the file I/O tests use `run_limit_test` to document these gracefully.
+The full `demo.sh` suite runs 100 policy checks against a fresh sprite. On v0.20.1, **98 are enforced with 0 failures**; the 2 documented limitations below use `run_limit_test` so the suite reports them gracefully rather than failing.
+
+**System path file I/O — enforced.** agentsh v0.20.1 enables seccomp `file_monitor` with `enforce_without_fuse: true`, which intercepts file syscalls (openat, mkdirat, unlinkat, and legacy non-at variants on x86_64) and enforces `file_rules` on system paths. Writes to `/etc`, `/usr/bin`, and similar — via `cp`, `touch`, `mkdir`, `tee`, or a `python3` subprocess — are all blocked. This integration enforces through `agentsh exec` and the shell shim with `sandbox.unix_sockets.enabled: false`; v0.20.1's wrap-init gate (#362/#364) ensures the shim no longer engages `agentsh-unixwrap` in that configuration, which previously broke non-PTY `exec` on Firecracker runtimes. The policy includes rules for common system files needed by commands (ld.so.cache, nsswitch.conf, etc.).
+
+**Network DNS-redirect latency (known limitation).** Outbound HTTPS to allowed package registries (`pypi.org`, `registry.npmjs.org`) occasionally records as a limitation when the ptrace DNS-redirect path adds enough latency that the request does not complete within the test window. Policy still applies — this is a timing artifact of the ptrace network backend, not a policy gap.
+
+**Multi-context top-level command check (known limitation).** Command-rule evaluation matches the top-level command of an `agentsh exec` invocation, so a blocked command launched directly by a wrapper such as `env sudo whoami` is not caught (the top-level `env` is evaluated, not the nested `sudo`). Directly blocked commands (`sudo whoami`) are denied, and seccomp execve interception still catches blocked commands spawned deeper in the process tree — via `xargs`, `find -exec`, a nested script, or a `python3` subprocess.
 
 ## Quick Start
 
@@ -208,7 +214,7 @@ Key environment variables (set in `/etc/profile.d/agentsh.sh`):
 | `AGENTSH_SHIM_FORCE` | Unset | Set `1` to enforce policy for non-interactive commands |
 | `AGENTSH_SHIM_DEBUG` | Unset | Set `1` for shim debug output to stderr |
 
-**Non-interactive enforcement:** v0.18.3 supports `/etc/agentsh/shim.conf` as a file-based alternative to `AGENTSH_SHIM_FORCE`. This is useful for sandbox APIs that execute commands without a PTY and need policy enforcement without relying on environment variables.
+**Non-interactive enforcement:** v0.20.1 supports `/etc/agentsh/shim.conf` as a file-based alternative to `AGENTSH_SHIM_FORCE`. This is useful for sandbox APIs that execute commands without a PTY and need policy enforcement without relying on environment variables.
 
 See the [agentsh documentation](https://github.com/canyonroad/agentsh) for the full policy reference.
 
