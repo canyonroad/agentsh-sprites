@@ -1,6 +1,6 @@
 # agentsh + Sprites
 
-Runtime security governance for AI agents using [agentsh](https://github.com/canyonroad/agentsh) v0.20.1 with [Sprites.dev](https://sprites.dev) sandboxes.
+Runtime security governance for AI agents using [agentsh](https://github.com/canyonroad/agentsh) v0.20.2 with [Sprites.dev](https://sprites.dev) sandboxes.
 
 ## Why agentsh + Sprites?
 
@@ -97,13 +97,13 @@ Command Execution Flow
 
 ### Known Limitations
 
-The full `demo.sh` suite runs 100 policy checks against a fresh sprite. On v0.20.1, **98 are enforced with 0 failures**; the 2 documented limitations below use `run_limit_test` so the suite reports them gracefully rather than failing.
+The full `demo.sh` suite runs 100 policy checks against a fresh sprite. On v0.20.2, **99 pass with 0 failures**; the single documented limitation below uses `run_limit_test` so the suite reports it gracefully rather than failing.
 
-**System path file I/O — enforced.** agentsh v0.20.1 enables seccomp `file_monitor` with `enforce_without_fuse: true`, which intercepts file syscalls (openat, mkdirat, unlinkat, and legacy non-at variants on x86_64) and enforces `file_rules` on system paths. Writes to `/etc`, `/usr/bin`, and similar — via `cp`, `touch`, `mkdir`, `tee`, or a `python3` subprocess — are all blocked. This integration enforces through `agentsh exec` and the shell shim with `sandbox.unix_sockets.enabled: false`; v0.20.1's wrap-init gate (#362/#364) ensures the shim no longer engages `agentsh-unixwrap` in that configuration, which previously broke non-PTY `exec` on Firecracker runtimes. The policy includes rules for common system files needed by commands (ld.so.cache, nsswitch.conf, etc.).
+**System path file I/O — enforced.** agentsh v0.20.2 enables seccomp `file_monitor` with `enforce_without_fuse: true`, which intercepts file syscalls (openat, mkdirat, unlinkat, and legacy non-at variants on x86_64) and enforces `file_rules` on system paths. Writes to `/etc`, `/usr/bin`, and similar — via `cp`, `touch`, `mkdir`, `tee`, or a `python3` subprocess — are all blocked. This integration enforces through `agentsh exec` and the shell shim with `sandbox.unix_sockets.enabled: false`; the wrap-init gate added in v0.20.0/v0.20.1 (#362/#364) ensures the shim no longer engages `agentsh-unixwrap` in that configuration, which previously broke non-PTY `exec` on Firecracker runtimes. The policy includes rules for common system files needed by commands (ld.so.cache, nsswitch.conf, etc.).
 
-**Network DNS-redirect latency (known limitation).** Outbound HTTPS to allowed package registries (`pypi.org`, `registry.npmjs.org`) occasionally records as a limitation when the ptrace DNS-redirect path adds enough latency that the request does not complete within the test window. Policy still applies — this is a timing artifact of the ptrace network backend, not a policy gap.
+**Outbound package registries — enforced.** Outbound HTTPS to allowed registries (`pypi.org`, `registry.npmjs.org`) is allowed reliably through the eBPF network backend (`cgroup_sock_addr`), which `agentsh detect` reports as the active network layer on Sprites. The v0.20.1 DNS-redirect latency artifact — where the ptrace network path occasionally added enough latency that the request missed the test window — no longer recurs.
 
-**Multi-context top-level command check (known limitation).** Command-rule evaluation matches the top-level command of an `agentsh exec` invocation, so a blocked command launched directly by a wrapper such as `env sudo whoami` is not caught (the top-level `env` is evaluated, not the nested `sudo`). Directly blocked commands (`sudo whoami`) are denied, and seccomp execve interception still catches blocked commands spawned deeper in the process tree — via `xargs`, `find -exec`, a nested script, or a `python3` subprocess.
+**Multi-context top-level command check (known limitation).** Command-rule evaluation matches the top-level command of an `agentsh exec` invocation, so a blocked command launched directly by a wrapper such as `env sudo whoami` is not caught (the top-level `env` is evaluated, not the nested `sudo`). Directly blocked commands (`sudo whoami`) are denied, and ptrace execve interception still catches blocked commands spawned deeper in the process tree — via `xargs`, `find -exec`, a nested script, or a `python3` subprocess.
 
 ## Quick Start
 
@@ -186,15 +186,17 @@ AI agent runs:  bash -c "sudo whoami"
 
 ## Platform Capabilities
 
-The install script runs `agentsh detect` to probe the Sprites environment. Current results (Protection Score: **85/100**):
+The install script runs `agentsh detect` to probe the Sprites environment. On v0.20.2 the probe reports **Security Mode: full** and **Protection Score: 85/100** — File Protection 25/25, Command Control 25/25, Network 20/20, Isolation 15/15, and Resource Limits 0/15.
+
+v0.20.2's honest-detect change (#392/#389) reports the backend that `detect`'s default mode would actually install, rather than overstating it. The detected active backends are below; note that this integration's deployed `config.yaml` additionally enables **ptrace mode** for deep process-tree interception (see [Enforcement Layers](#enforcement-layers)), which the Multi-Context tests confirm at runtime.
 
 | Capability | Status | Notes |
 |---|---|---|
-| seccomp | ✓ | Full seccomp-bpf with user-notify (execve + file_monitor) |
-| ptrace | ✓ | **Active backend** — execve, file, network, signal tracing |
-| FUSE | ✓ | Workspace file I/O interception (fusermount3) |
-| eBPF | ✓ | `cgroup_sock_addr` network monitoring (available since v0.18.0 probe fix) |
-| capabilities drop | ✓ | 25/41 dropped (permitted + bounding) |
+| seccomp | ✓ | seccomp-bpf with user-notify — `seccomp-execve` is the detected command backend; `file_monitor` enforces openat/stat on system paths |
+| FUSE | ✓ | Detected **file** backend — workspace file I/O interception (fusermount3), soft-delete, redirect |
+| eBPF | ✓ | Detected **network** backend — `cgroup_sock_addr` monitoring (available since the v0.18.0 probe fix) |
+| ptrace | ✓ | Available; **enabled in this integration's `config.yaml`** for execve/file/network/signal tracing across the process tree (detect's default mode lists it as available, not active) |
+| capabilities drop | ✓ | Detected **isolation** backend — 25/41 dropped (permitted + bounding) |
 | cgroups v2 | - | Unavailable — Firecracker VM cannot write `cgroup.subtree_control` |
 | Landlock | - | Requires kernel 6.7+ for network ABI |
 | PID namespace | - | Agent runs in host namespace inside the sprite |
@@ -214,7 +216,7 @@ Key environment variables (set in `/etc/profile.d/agentsh.sh`):
 | `AGENTSH_SHIM_FORCE` | Unset | Set `1` to enforce policy for non-interactive commands |
 | `AGENTSH_SHIM_DEBUG` | Unset | Set `1` for shim debug output to stderr |
 
-**Non-interactive enforcement:** v0.20.1 supports `/etc/agentsh/shim.conf` as a file-based alternative to `AGENTSH_SHIM_FORCE`. This is useful for sandbox APIs that execute commands without a PTY and need policy enforcement without relying on environment variables.
+**Non-interactive enforcement:** v0.20.2 supports `/etc/agentsh/shim.conf` as a file-based alternative to `AGENTSH_SHIM_FORCE`. This is useful for sandbox APIs that execute commands without a PTY and need policy enforcement without relying on environment variables.
 
 See the [agentsh documentation](https://github.com/canyonroad/agentsh) for the full policy reference.
 
